@@ -791,7 +791,9 @@ def status_label(state: dict[str, Any] | None) -> str | None:
     `pending:<epoch>` means the peer holds the turn until that ack deadline, so
     a turn that ends here needs nobody. A pending frame whose delivery was not
     confirmed is `unconfirmed` instead, because a person may have to press Enter
-    in the peer pane. Every other status is published under its own name.
+    in the peer pane. One whose send has not returned is `sending`: the helper
+    is still delivering it, or stopped partway and nobody knows how far it got.
+    Every other status is published under its own name.
     """
     if not state or not state.get("status"):
         return None
@@ -799,6 +801,8 @@ def status_label(state: dict[str, Any] | None) -> str | None:
         return str(state["status"])
     if state.get("delivery"):
         return "unconfirmed"
+    if state.get("sending"):
+        return "sending"
     return f"pending:{int(float(state.get('ack_deadline', 0)))}"
 
 
@@ -2102,12 +2106,18 @@ def send_or_release(identity: dict[str, str], target: str,
     still be submitted, so the pending record stays, marked with how delivery
     ended, and the peer's reply to it is accepted as usual. A stop frame gets no
     reply, so its record is terminated instead.
+
+    The record written here carries `sending`, and only the caller's save after
+    a returned delivery drops it. A process that dies or is interrupted inside
+    send_message therefore leaves a record that still accepts the peer's reply
+    but is not published as a delivered message (see status_label).
     """
     previous = load_state(identity)
     save_state(identity, {"status": "pending", "bridge": meta["bridge"],
                           "turn": int(meta["turn"]), "max": int(meta["max"]),
                           "target": target, "goal_b64": goal_b64,
-                          "ack_deadline": time.time() + DEFAULT_ACK_TIMEOUT})
+                          "ack_deadline": time.time() + DEFAULT_ACK_TIMEOUT,
+                          "sending": True})
     try:
         return send_message(identity, target, meta, body)
     except PeerBridgeUnavailable as exc:
@@ -2122,6 +2132,7 @@ def send_or_release(identity: dict[str, str], target: str,
         record = load_state(identity) or {}
         if meta.get("stop"):
             record.update(status="terminated", reason=meta["stop"])
+        record.pop("sending", None)
         record.update(delivery=exc.delivery, delivery_detail=str(exc))
         save_state(identity, record)
         log_line = (f"UNCERTAIN target={target} turn={meta['turn']}/{meta['max']} "

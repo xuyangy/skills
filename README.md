@@ -214,7 +214,7 @@ This is automatic; both sides just need the same version of the script.
 python3 -m unittest discover -s tests
 ```
 
-305 tests, no dependencies, no tmux server needed — they stub the transport and
+307 tests, no dependencies, no tmux server needed — they stub the transport and
 check framing, the integrity checksum, the state machine, turn bounds, timeouts,
 and the submit check. They do not prove delivery; that part is checked against a
 real pane by hand.
@@ -237,8 +237,9 @@ on screen — the log file is then the only view.
 
 ## Telling a notifier that a message was sent
 
-A turn that ends with a bridge message is not a turn that ends for you: the peer
-has the work now. So that a desktop notifier can tell the two apart, the helper
+While a delivered bridge message waits for its answer, a turn that ends in this
+pane is not a turn that ends for you: the peer has the work now. So that a
+desktop notifier can tell the two apart, the helper
 mirrors each pane's bridge status into the tmux pane option
 `@agent_bridge_status` every time the status changes:
 
@@ -246,6 +247,7 @@ mirrors each pane's bridge status into the tmux pane option
 | --- | --- |
 | `pending:<epoch>` | a message was delivered and the peer has the turn until that ack deadline, in epoch seconds |
 | `unconfirmed` | a message was typed into the peer but delivery was not confirmed; someone may have to press Enter there |
+| `sending` | the helper is delivering a message, or stopped partway through and how far it got is unknown |
 | `awaiting_reply` | this pane received a message and owes the reply |
 | `terminated`, `timed_out` | no bridge is live in this pane |
 

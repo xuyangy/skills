@@ -3518,6 +3518,7 @@ class TestStatusLabel(ExchangeCase):
                 self.assertRaises(ab.DeliveryUncertain):
             self.start("hello")
         self.assertEqual(self.label("%1"), "unconfirmed")
+        self.assertNotIn("sending", ab.load_state(self.a))
 
     def test_a_peer_that_was_not_ready_restores_the_previous_label(self) -> None:
         def not_ready(*_args: object, **_kw: object) -> None:
@@ -3528,6 +3529,29 @@ class TestStatusLabel(ExchangeCase):
             self.start("hello")
         self.assertIsNone(self.label("%1"))
         self.assertEqual(self.calls[-1][4], "-u")
+
+    def test_a_send_that_never_returned_is_not_published_as_pending(self) -> None:
+        # Ctrl-C during a readiness wait, or a file error writing the outbound
+        # frame: neither is a BridgeError, so nothing rewrites the record.
+        for failure in (KeyboardInterrupt(), OSError("disk full")):
+            with self.subTest(failure=type(failure).__name__):
+                def dies(*_args: object, _failure: BaseException = failure,
+                         **_kw: object) -> None:
+                    raise _failure
+
+                setattr(ab, "send_message", dies)
+                with self.assertRaises(type(failure)):
+                    self.start("hello", fresh=True)
+                self.assertEqual(ab.load_state(self.a)["status"], "pending")
+                self.assertEqual(self.label("%1"), "sending")
+
+    def test_a_delivered_send_drops_the_sending_mark(self) -> None:
+        self.start("hello")
+        self.assertNotIn("sending", ab.load_state(self.a))
+        self.as_agent(self.b)
+        self.receive(self.wire.last, "b")
+        self.reply("answer", "b")
+        self.assertNotIn("sending", ab.load_state(self.b))
 
     def test_an_expired_ack_is_published_as_timed_out(self) -> None:
         self.start("hello")
