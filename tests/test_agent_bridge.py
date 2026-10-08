@@ -3465,5 +3465,89 @@ class TestProcSelfCheck(TempRoot):
         self.assertEqual(parents.get(os.getpid()), os.getppid())
 
 
+class TestStatusLabel(ExchangeCase):
+    """The pane option a notifier reads to tell a handoff from a completion."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.calls: list[list[str]] = []
+
+        def record(args: list[str], **_kw: object) -> None:
+            self.calls.append(args)
+
+        for name, fake in (("run_tmux", record), ("tmux_socket", lambda: SOCKET)):
+            original = getattr(ab, name)
+            setattr(ab, name, fake)
+            self.addCleanup(setattr, ab, name, original)
+
+    def label(self, pane: str) -> str | None:
+        """The value the option holds after every recorded call for `pane`."""
+        value = None
+        for args in self.calls:
+            self.assertEqual(args[:4], ["set-option", "-p", "-t", args[3]])
+            if args[3] != pane:
+                continue
+            value = None if args[4] == "-u" else args[5]
+            self.assertIn(ab.STATUS_OPTION, args[4:])
+        return value
+
+    def test_a_delivered_send_publishes_pending_with_its_ack_deadline(self) -> None:
+        self.start("hello")
+        deadline = int(ab.load_state(self.a)["ack_deadline"])
+        self.assertEqual(self.label("%1"), f"pending:{deadline}")
+
+    def test_the_label_follows_the_turn(self) -> None:
+        self.start("hello")
+        self.as_agent(self.b)
+        self.receive(self.wire.last, "b")
+        self.assertEqual(self.label("%2"), "awaiting_reply")
+        self.reply("answer", "b")
+        self.assertTrue(self.label("%2").startswith("pending:"))
+        ab.command_reset(types.SimpleNamespace(all=False))
+        self.assertEqual(self.label("%2"), "terminated")
+
+    def test_an_unconfirmed_delivery_is_not_published_as_pending(self) -> None:
+        wire = self.wire
+
+        def send(identity, target, meta, body):
+            wire(identity, target, meta, body)
+            raise ab.DeliveryUncertain("unsent", "frame typed; delivery unknown")
+
+        setattr(ab, "send_message", send)
+        with contextlib.redirect_stdout(io.StringIO()), \
+                self.assertRaises(ab.DeliveryUncertain):
+            self.start("hello")
+        self.assertEqual(self.label("%1"), "unconfirmed")
+
+    def test_a_peer_that_was_not_ready_restores_the_previous_label(self) -> None:
+        def not_ready(*_args: object, **_kw: object) -> None:
+            raise ab.PeerNotReady("target %2 did not reach a confirmed idle prompt")
+
+        setattr(ab, "send_message", not_ready)
+        with self.assertRaises(ab.PeerNotReady):
+            self.start("hello")
+        self.assertIsNone(self.label("%1"))
+        self.assertEqual(self.calls[-1][4], "-u")
+
+    def test_an_expired_ack_is_published_as_timed_out(self) -> None:
+        self.start("hello")
+        state = ab.load_state(self.a)
+        state["ack_deadline"] = time.time() - 1
+        ab.expire_stale(self.a, state)
+        self.assertEqual(self.label("%1"), "timed_out")
+
+    def test_nothing_is_published_to_a_server_this_process_is_not_on(self) -> None:
+        setattr(ab, "tmux_socket", lambda: "")
+        self.start("hello")
+        self.assertEqual(self.calls, [])
+
+    def test_a_tmux_failure_does_not_fail_the_send(self) -> None:
+        def broken(_args: list[str], **_kw: object) -> None:
+            raise ab.BridgeError("tmux is not installed or not on PATH")
+
+        setattr(ab, "run_tmux", broken)
+        self.assertEqual(self.start("hello")["delivery"], "delivered")
+
+
 if __name__ == "__main__":
     unittest.main()

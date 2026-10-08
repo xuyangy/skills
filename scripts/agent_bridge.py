@@ -155,6 +155,8 @@ STALE_STATE_TIMEOUT = int(os.environ.get("AGENT_BRIDGE_STALE_TIMEOUT",
 GLOBAL_ABORT_OVERRIDE = os.environ.get("AGENT_BRIDGE_ABORT", "")
 LEGACY_GLOBAL_ABORT = Path("/tmp/agent-bridge.stop")
 LEGACY_STATE_ROOT = Path(tempfile.gettempdir()) / "agent-bridge"
+# The pane option that mirrors this pane's bridge status (see publish_status).
+STATUS_OPTION = "@agent_bridge_status"
 TAIL_LINES = 12
 
 
@@ -780,6 +782,47 @@ def save_state(identity: dict[str, str], value: dict[str, Any]) -> None:
     value["seen"] = seen
     value["updated_at"] = now
     atomic_json(Path(identity["state_file"]), value)
+    publish_status(identity, value)
+
+
+def status_label(state: dict[str, Any] | None) -> str | None:
+    """This pane's bridge status as one word a notifier can act on.
+
+    `pending:<epoch>` means the peer holds the turn until that ack deadline, so
+    a turn that ends here needs nobody. A pending frame whose delivery was not
+    confirmed is `unconfirmed` instead, because a person may have to press Enter
+    in the peer pane. Every other status is published under its own name.
+    """
+    if not state or not state.get("status"):
+        return None
+    if state["status"] != "pending":
+        return str(state["status"])
+    if state.get("delivery"):
+        return "unconfirmed"
+    return f"pending:{int(float(state.get('ack_deadline', 0)))}"
+
+
+def publish_status(identity: dict[str, str], state: dict[str, Any] | None) -> None:
+    """Mirror the state onto the pane as the tmux option STATUS_OPTION.
+
+    A notifier running in this pane's hooks reads the option to tell a turn that
+    ended by handing work to the peer from one that ended for the user, without
+    knowing where state files live or how they are named.
+
+    Best effort, and silent: the option is a hint for another tool, so failing
+    to set it must never fail a send. Skipped unless this process is attached to
+    the server the identity names, so a run outside tmux touches no pane.
+    """
+    socket = identity.get("self_socket", "")
+    if not socket or canonical_socket(tmux_socket()) != canonical_socket(socket):
+        return
+    label = status_label(state)
+    args = ["set-option", "-p", "-t", identity["self_pane"]]
+    args += ["-u", STATUS_OPTION] if label is None else [STATUS_OPTION, label]
+    try:
+        run_tmux(args, check=False)
+    except BridgeError:
+        pass
 
 
 def bootstrap_seen(state: dict[str, Any] | None, token: str) -> bool:
@@ -2094,6 +2137,7 @@ def send_or_release(identity: dict[str, str], target: str,
             Path(identity["state_file"]).unlink(missing_ok=True)
         else:
             atomic_json(Path(identity["state_file"]), previous)
+        publish_status(identity, previous)
         raise
     except BridgeError as exc:
         save_state(identity, {"status": "terminated", "reason": f"delivery failed: {exc}",
