@@ -10,10 +10,19 @@ its `SKILL.md` is what the agent reads, and any `README.md` beside it is for you
 
 ## Install
 
-Link the skills you want into your agent's skills folder, for example for
-Claude Code:
+Install with [OpenSkills](https://github.com/numman-ali/openskills). It copies
+every skill in this repo from the latest commit on `main`:
 
 ```bash
-ln -s "$PWD/skills/agent-bridge-tmux" ~/.claude/skills/agent-bridge-tmux
-ln -s "$PWD/skills/backlog-bridge-loop" ~/.claude/skills/backlog-bridge-loop
+npx openskills install xuyangy/skills --global              # into ~/.claude/skills
+npx openskills install xuyangy/skills --global --universal  # into ~/.agent/skills
 ```
+
+Update to the latest `main`:
+
+```bash
+npx openskills update
+```
+
+Installed skills are copies, so nothing changes until you update. `main` is
+what gets installed: keep unfinished work on a branch.
