@@ -10,18 +10,18 @@ its `SKILL.md` is what the agent reads, and any `README.md` beside it is for you
 
 ## Install
 
-Install with [OpenSkills](https://github.com/numman-ali/openskills). It copies
-every skill in this repo from the latest commit on `main`:
+Install with [skills](https://github.com/vercel-labs/skills). It copies the
+skills from the latest commit on `main`, for all your projects:
 
 ```bash
-npx openskills install xuyangy/skills --global              # into ~/.claude/skills
-npx openskills install xuyangy/skills --global --universal  # into ~/.agent/skills
+npx skills add xuyangy/skills -g
 ```
 
-Update to the latest `main`:
+Check for updates, and update to the latest `main`:
 
 ```bash
-npx openskills update
+npx skills check
+npx skills update
 ```
 
 Installed skills are copies, so nothing changes until you update. `main` is
