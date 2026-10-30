@@ -173,7 +173,7 @@ Knobs, if your setup needs them:
 | --- | --- | --- |
 | `AGENT_BRIDGE_SUBMIT_DELAY` | `0.8` | wait before the first Enter; raise for a slow TUI |
 | `AGENT_BRIDGE_SUBMIT_ATTEMPTS` | `4` | total Enter presses; `1` disables the check |
-| `AGENT_BRIDGE_INPUT_MODE` | `screen` | `screen` reads the input box of Claude Code or Codex and refuses any other screen; `tail` treats the bottom lines as the input box, for other targets |
+| `AGENT_BRIDGE_INPUT_MODE` | `screen` | `screen` reads the input box of Claude Code, Codex, or Antigravity and refuses any other screen; `tail` treats the bottom lines as the input box, for other targets |
 | `AGENT_BRIDGE_INPUT_TAIL` | `5` | `tail` mode only: how many bottom lines count as the input box |
 | `AGENT_BRIDGE_READY_TIMEOUT` | `900` | seconds to wait for a busy peer to go idle before giving up |
 | `AGENT_BRIDGE_FOCUS` | `notify` | tells the target pane it has focus, so a TUI that holds unfocused keystrokes accepts them; nothing moves on screen. `off` skips it |

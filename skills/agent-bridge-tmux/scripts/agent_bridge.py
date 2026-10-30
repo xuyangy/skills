@@ -113,9 +113,9 @@ SUBMIT_CONFIRM_BACKOFF = (2.0, 4.0, 6.0, 8.0)
 # delivery=unconfirmed, never delivered.
 SUBMIT_ATTEMPTS = int(os.environ.get("AGENT_BRIDGE_SUBMIT_ATTEMPTS", "4"))
 # How delivery reads the target's input box. "screen" (default) locates the
-# input box of a known agent UI (Claude Code, Codex) on the visible screen and
-# reads only that; a screen it does not recognise is refused before anything is
-# typed. "tail" is the heuristic for any other target: the bottom
+# input box of a known agent UI (Claude Code, Codex, Antigravity) on the
+# visible screen and reads only that; a screen it does not recognise is refused
+# before anything is typed. "tail" is the heuristic for any other target: the bottom
 # INPUT_TAIL_LINES non-blank lines stand in for the input box.
 INPUT_MODE = os.environ.get("AGENT_BRIDGE_INPUT_MODE", "screen")
 # Tail mode only. The input box occupies only the bottom few lines. Looking
@@ -1758,9 +1758,12 @@ SGR_RE = re.compile(r"\x1b\[([0-9;:]*)m")
 RULE_RE = re.compile(r"^\s*─{8,}\s*$")
 CLAUDE_PROMPT = "❯"
 CODEX_PROMPT = "›"
+ANTIGRAVITY_PROMPT = ">"
 # Codex draws its status line, and at most a warning or two, under the input
 # box. More than this below the prompt row means the row is not the input box.
 CODEX_FOOTER_LINES = 4
+# Antigravity draws one status line under the closing rule of its input box.
+ANTIGRAVITY_FOOTER_LINES = 3
 
 
 def split_dim(capture: str) -> tuple[list[str], list[str]]:
@@ -1833,25 +1836,41 @@ def codex_input(plain: list[str]) -> tuple[int, int] | None:
     return None
 
 
+def antigravity_input(plain: list[str]) -> tuple[int, int] | None:
+    """Rows of Antigravity's input box: from a > row directly under a rule
+    through the row before the last rule on screen, with only its footer
+    underneath. Antigravity echoes past prompts in the transcript as > rows
+    under a rule too, but the input box is always the lowest pair of rules."""
+    rules = [index for index, line in enumerate(plain) if RULE_RE.match(line)]
+    if len(rules) < 2:
+        return None
+    top, bottom = rules[-2], rules[-1]
+    footer = [line for line in plain[bottom + 1:] if line.strip()]
+    if bottom - top < 2 or len(footer) > ANTIGRAVITY_FOOTER_LINES:
+        return None
+    return (top + 1, bottom) if plain[top + 1].startswith(ANTIGRAVITY_PROMPT) else None
+
+
 def observe_input(capture: str) -> str:
     """Classify the input box on a visible-screen capture taken with escapes.
 
     Only the rows of a recognised input box are read. A frame or paste
     placeholder anywhere else — the transcript, a status line — is not in the
     input box and does not count, however close to the bottom it sits. When
-    both UIs seem to match, the box lower on screen wins.
+    more than one UI seems to match, the box lower on screen wins.
     """
     plain, solid = split_dim(capture)
-    found = [box for box in (claude_input(plain), codex_input(plain)) if box]
+    found = [(box, prompt) for box, prompt in ((claude_input(plain), CLAUDE_PROMPT),
+                                               (codex_input(plain), CODEX_PROMPT),
+                                               (antigravity_input(plain), ANTIGRAVITY_PROMPT))
+             if box]
     if not found:
         return INPUT_UNKNOWN
-    start, end = max(found)
+    (start, end), prompt = max(found)
     text = "\n".join(plain[start:end])
     if FRAME_END in text or PASTE_PLACEHOLDER_RE.search(text):
         return INPUT_HOLDS_FRAME
-    typed = "\n".join(solid[start:end]).strip()
-    for prompt in (CLAUDE_PROMPT, CODEX_PROMPT):
-        typed = typed.removeprefix(prompt)
+    typed = "\n".join(solid[start:end]).strip().removeprefix(prompt)
     return INPUT_OTHER_TEXT if typed.strip() else INPUT_EMPTY
 
 
@@ -1969,12 +1988,12 @@ def deliver(target: str, msg: str) -> str:
             why = ("already holds text" if before in (INPUT_OTHER_TEXT, INPUT_HOLDS_FRAME)
                    else "is not an input box this can read — a modal, a startup "
                         "notice, a permission dialog, or a UI other than Claude "
-                        "Code or Codex")
+                        "Code, Codex, or Antigravity")
             raise PeerNotReady(
                 f"the screen of {target} {why}, so nothing was typed. Nothing "
                 f"was sent and no turn was used. Clear that pane by hand until it "
                 f"shows an ordinary empty prompt, then run the same command again. "
-                f"For a target that is not Claude Code or Codex, set "
+                f"For a target that is not Claude Code, Codex, or Antigravity, set "
                 f"AGENT_BRIDGE_INPUT_MODE=tail."
             )
         type_into(target, msg)

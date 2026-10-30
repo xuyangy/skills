@@ -1550,6 +1550,142 @@ class TestReadInput(unittest.TestCase):
         self.assertNotIn("-S", seen[0])
 
 
+# Trimmed from live captures of Antigravity CLI 1.4.11, taken the same way.
+ANTIGRAVITY_RULE = "\x1b[38;5;238m" + "─" * 40
+ANTIGRAVITY_IDLE = ("\x1b[39m" + " " * 20 + "\x1b[38;5;109m? for shortcuts\x1b[39m"
+                    + " " * 20 + "\x1b[38;5;109mGemini 4 Argon · high\n")
+ANTIGRAVITY_BUSY = ("\x1b[39m\x1b[38;5;109mesc to cancel\x1b[39m" + " " * 20
+                    + "\x1b[38;5;109mGemini 4 Argon · high\n")
+
+
+def antigravity_screen(input_rows: str, *, above: str = "\x1b[38;5;189mpong\x1b[39m\n\n",
+                       footer: str = ANTIGRAVITY_IDLE) -> str:
+    return (f"{above}{ANTIGRAVITY_RULE}\n\x1b[38;5;111m>\x1b[39m {input_rows}\n"
+            f"{ANTIGRAVITY_RULE}\n{footer}")
+
+
+# A past prompt: Antigravity echoes it under a rule, like its input box.
+ANTIGRAVITY_PAST = (f"{ANTIGRAVITY_RULE}\n\x1b[1m\x1b[38;5;111m> {ab.FRAME_START} "
+                    f"turn=1 >>> body {ab.FRAME_END}\x1b[0m\n\n")
+
+
+class TestAntigravityInput(unittest.TestCase):
+    """Antigravity's input box is a > row between two rules, the lowest pair on
+    screen. Its transcript echoes past prompts as > rows under a rule too."""
+
+    def test_an_empty_prompt_is_empty(self) -> None:
+        self.assertEqual(ab.observe_input(antigravity_screen("")), ab.INPUT_EMPTY)
+
+    def test_typed_text_is_not_empty(self) -> None:
+        self.assertEqual(ab.observe_input(antigravity_screen("draft text")),
+                         ab.INPUT_OTHER_TEXT)
+        self.assertEqual(ab.observe_input(antigravity_screen("> quoted")),
+                         ab.INPUT_OTHER_TEXT)
+
+    def test_a_pending_frame_wrapped_over_rows_is_in_the_input_box(self) -> None:
+        rows = (f"{ab.FRAME_START} turn=1 >>> {'word ' * 30}\n  {'word ' * 30}\n"
+                f"  {ab.FRAME_END}")
+        self.assertEqual(ab.observe_input(antigravity_screen(rows)), ab.INPUT_HOLDS_FRAME)
+
+    def test_past_prompts_in_the_transcript_do_not_count(self) -> None:
+        above = ANTIGRAVITY_PAST + "  \x1b[38;5;189mpong\x1b[39m\n\n"
+        self.assertEqual(ab.observe_input(antigravity_screen("", above=above)),
+                         ab.INPUT_EMPTY)
+
+    def test_a_past_prompt_is_not_read_as_the_input_box(self) -> None:
+        # The live box is replaced by something this cannot read. The echoed
+        # frame above it must not stand in for the input box.
+        screen = ANTIGRAVITY_PAST + f"{ANTIGRAVITY_RULE}\n  Allow this command?\n" + \
+            "\n".join(f"  option {n}" for n in range(6)) + "\n"
+        self.assertEqual(ab.observe_input(screen), ab.INPUT_UNKNOWN)
+
+    def test_busy_output_is_busy_and_leaves_the_input_box_readable(self) -> None:
+        above = ANTIGRAVITY_PAST + "⣻  Generating...\n"
+        screen = antigravity_screen("", above=above, footer=ANTIGRAVITY_BUSY)
+        self.assertFalse(ab.looks_ready(screen))
+        self.assertEqual(ab.observe_input(screen), ab.INPUT_EMPTY)
+        self.assertEqual(ab.observe_input(antigravity_screen(
+            "draft", above=above, footer=ANTIGRAVITY_BUSY)), ab.INPUT_OTHER_TEXT)
+
+    def test_an_idle_pane_looks_ready(self) -> None:
+        self.assertTrue(ab.looks_ready(antigravity_screen("", above=ANTIGRAVITY_PAST)))
+
+    def test_a_modal_is_never_empty(self) -> None:
+        trust = ("\x1b[1m\x1b[38;5;221mAccessing workspace:\x1b[0m\n\n"
+                 "Do you trust the contents of this project?\n\n"
+                 "\x1b[38;5;111m> Yes, I trust this folder\x1b[39m\n"
+                 "  \x1b[38;5;109mNo, exit\x1b[39m\n\n"
+                 "  \x1b[38;5;111m↑/↓\x1b[0m\x1b[38;5;109m Navigate · enter Confirm\n")
+        options = (f"{ANTIGRAVITY_RULE}\n\x1b[38;5;111m> Allow once\x1b[39m\n"
+                   f"  Deny\n{ANTIGRAVITY_RULE}\n{ANTIGRAVITY_IDLE}")
+        for screen in (trust, options):
+            with self.subTest(screen=screen):
+                self.assertNotEqual(ab.observe_input(screen), ab.INPUT_EMPTY)
+                self.assertNotEqual(ab.observe_input(screen), ab.INPUT_HOLDS_FRAME)
+
+    def test_a_claude_box_is_not_read_as_antigravity(self) -> None:
+        plain, _solid = ab.split_dim(claude_screen(""))
+        self.assertIsNone(ab.antigravity_input(plain))
+
+
+class TestAntigravityDelivery(unittest.TestCase):
+    """deliver() in the default screen mode against Antigravity screens."""
+
+    def setUp(self) -> None:
+        self.typed = 0
+        self.enters = 0
+        self.screens: list[str] = []
+        capture = lambda *_a, **_k: types.SimpleNamespace(returncode=0,
+                                                         stdout=self.next_screen())
+        for name, value in (("type_into", lambda *_a, **_k: self.type()),
+                            ("wait_settled", lambda *_a, **_k: None),
+                            ("press_enter", lambda *_a, **_k: self.enter()),
+                            ("capture_pane_text", capture),
+                            ("Focus", lambda *_a, **_k: contextlib.nullcontext()),
+                            ("INPUT_MODE", "screen"),
+                            ("SUBMIT_ATTEMPTS", 4)):
+            patcher = mock.patch.object(ab, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = mock.patch.object(ab.time, "sleep", lambda *_a: None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def type(self) -> None:
+        self.typed += 1
+
+    def enter(self) -> None:
+        self.enters += 1
+
+    def next_screen(self) -> str:
+        return self.screens.pop(0) if len(self.screens) > 1 else self.screens[0]
+
+    def test_an_idle_pane_takes_the_frame(self) -> None:
+        frame = f"{ab.FRAME_START} turn=1 >>> body {ab.FRAME_END}"
+        self.screens = [antigravity_screen(""), antigravity_screen(frame),
+                        antigravity_screen("", above=ANTIGRAVITY_PAST)]
+        self.assertEqual(ab.deliver("%2", "frame"), "delivered")
+        self.assertEqual((self.typed, self.enters), (1, 1))
+
+    def test_occupied_or_unreadable_input_refuses_without_typing(self) -> None:
+        for screen in (antigravity_screen("draft text"),
+                       antigravity_screen(f"{ab.FRAME_START} turn=1 >>> b {ab.FRAME_END}"),
+                       "Do you trust the contents of this project?\n\n"
+                       "> Yes, I trust this folder\n  No, exit\n"):
+            with self.subTest(screen=screen):
+                self.screens = [screen]
+                with self.assertRaises(ab.PeerNotReady):
+                    ab.deliver("%2", "frame")
+                self.assertEqual((self.typed, self.enters), (0, 0))
+
+    def test_a_frame_that_stays_in_the_input_box_is_unsent(self) -> None:
+        frame = f"{ab.FRAME_START} turn=1 >>> body {ab.FRAME_END}"
+        self.screens = [antigravity_screen(""), antigravity_screen(frame)]
+        with self.assertRaises(ab.DeliveryUncertain) as caught:
+            ab.deliver("%2", "frame")
+        self.assertEqual(caught.exception.delivery, "unsent")
+
+
 class TestScreenDelivery(unittest.TestCase):
     """deliver() in screen mode, with the input box scripted one read at a time."""
 

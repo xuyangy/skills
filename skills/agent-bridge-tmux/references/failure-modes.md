@@ -261,6 +261,10 @@ screen before anything is typed, and nothing is typed unless it is empty:
 
 - Claude Code: a `❯` row directly under a horizontal rule, through the next rule.
 - Codex: the last row starting with `›`, with only its status line underneath.
+- Antigravity: a `>` row directly under a horizontal rule, through the last
+  rule on screen, with only its status line underneath. Past prompts in its
+  transcript are `>` rows under a rule too, but never between the lowest
+  pair of rules.
 - Dim text is the empty box's hint ("Ask Codex to do anything"), not input.
 
 A modal has no such box, and text somebody typed is not empty, so both refuse
@@ -273,9 +277,9 @@ count then misses a frame that is plainly in the input box. Busy wording in
 those lines is about the background agent, so it proves nothing about the frame.
 
 The rest of this section describes `AGENT_BRIDGE_INPUT_MODE=tail`, the
-heuristic for targets other than Claude Code and Codex. There the frame is
-typed first and looked for afterwards, and a miss reads `never appeared in its
-bottom N lines`.
+heuristic for targets other than Claude Code, Codex, and Antigravity. There
+the frame is typed first and looked for afterwards, and a miss reads `never
+appeared in its bottom N lines`.
 
 What made this silent was the shape of the old submit check. `submitted()`
 reasons from *absence*: no delimiter and no paste placeholder in the input area,

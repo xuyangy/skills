@@ -501,9 +501,9 @@ until it shows an ordinary empty prompt, then run the same command again. Do not
 `reset` and do not open a new bridge. If the peer was restarted, its pane id has
 changed — re-resolve the window before you retry.
 
-The helper reads the input boxes of Claude Code and Codex. For any other target,
-set `AGENT_BRIDGE_INPUT_MODE=tail`: the bottom lines of the pane then stand in
-for the input box.
+The helper reads the input boxes of Claude Code, Codex, and Antigravity. For any
+other target, set `AGENT_BRIDGE_INPUT_MODE=tail`: the bottom lines of the pane
+then stand in for the input box.
 
 Raise the budget with `AGENT_BRIDGE_READY_TIMEOUT=<seconds>` when the peer is
 known to be on a long job. The budget is wall-clock and covers the checks
