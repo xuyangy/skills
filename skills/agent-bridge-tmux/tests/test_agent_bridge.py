@@ -1466,6 +1466,85 @@ def codex_screen(input_row: str, *, above: str = "• Worked for 1m 6s\n\n") -> 
 
 CODEX_HINT = "\x1b[2mAsk Codex to do anything"
 
+# A named Claude Code session (v2.1.316) puts its name in the top border of the
+# input box. Rows trimmed from a live capture, as above; the titled rule keeps
+# the 40-column width of CLAUDE_RULE, as both rules span the pane.
+CLAUDE_TITLE = " commit-stories-6-resume-loop ─"
+CLAUDE_TITLED_RULE = "\x1b[38;5;244m" + "─" * (40 - len(CLAUDE_TITLE)) + CLAUDE_TITLE
+CLAUDE_GHOST = "\x1b[2mKeep the loop going through 7a, 7b and story 8\n\x1b[0m"
+
+
+def claude_titled_screen(input_row: str, *, above: str = "assistant output\n\n") -> str:
+    return (f"{above}{CLAUDE_TITLED_RULE}\n\x1b[39m❯\xa0{input_row}\n{CLAUDE_RULE}\n"
+            f"{CLAUDE_STATUS}")
+
+
+class TestClaudeTitledInput(unittest.TestCase):
+    """The session name in the top border does not hide the input box."""
+
+    def test_empty_and_ghost_text_are_empty(self) -> None:
+        for row in ("", CLAUDE_GHOST):
+            with self.subTest(row=row):
+                self.assertEqual(ab.observe_input(claude_titled_screen(row)), ab.INPUT_EMPTY)
+
+    def test_typed_text_is_other_text(self) -> None:
+        self.assertEqual(ab.observe_input(claude_titled_screen("draft text")),
+                         ab.INPUT_OTHER_TEXT)
+
+    def test_frame_and_placeholder_are_held(self) -> None:
+        for row in ("[Pasted text #2]", f"{ab.FRAME_START} turn=1 >>> body {ab.FRAME_END}"):
+            with self.subTest(row=row):
+                self.assertEqual(ab.observe_input(claude_titled_screen(row)),
+                                 ab.INPUT_HOLDS_FRAME)
+
+    def test_a_titled_line_without_a_whole_box_is_not_an_input_box(self) -> None:
+        for screen in (
+                # Title row and prompt, but no closing rule.
+                f"output\n{CLAUDE_TITLED_RULE}\n❯ quoted prompt\nmore output\n",
+                # A quoted prompt with no rule above it.
+                "output\n  some name ─\n❯ quoted prompt\n" + CLAUDE_RULE + "\n",
+                # Text in the rule that is not a title: no closing ─.
+                "output\n" + "─" * 40 + " section\n❯ \n" + CLAUDE_RULE + "\n"):
+            with self.subTest(screen=screen):
+                self.assertEqual(ab.observe_input(screen), ab.INPUT_UNKNOWN)
+
+    def test_a_quoted_titled_box_above_a_modal_is_not_an_input_box(self) -> None:
+        modal = ("\n  Do you trust this folder?\n    1. Yes\n    2. No\n"
+                 "    Enter to confirm\n")
+        for box in (
+                # Rows of different widths.
+                "─" * 40 + " session ─\n❯ \n" + "─" * 40 + "\n",
+                # Indented, as Claude Code indents its own transcript.
+                "  " + "─" * 30 + " session ─\n  ❯ \n  " + "─" * 40 + "\n"):
+            with self.subTest(box=box):
+                screen = f"Example layout:\n{box}{modal}"
+                self.assertEqual(ab.observe_input(screen), ab.INPUT_UNKNOWN)
+
+    def test_title_width_counts_character_groups(self) -> None:
+        # Each title with the terminal columns it takes up, rule included.
+        for title, width in ((" 🥺 commit-stories-6-resume-loop ─", 34),  # live capture
+                             (" 会话 ─", 7),
+                             (" 👩\u200d💻 ─", 5),      # joined emoji
+                             (" 👍🏽 ─", 5),              # skin-tone modifier
+                             (" ❤\ufe0f ─", 5),          # emoji presentation
+                             (" ✳ ─", 4),                 # text presentation
+                             (" cafe\u0301 ─", 7),       # combining accent
+                             (" 🇯🇵 ─", 5)):              # flag
+            with self.subTest(title=title):
+                self.assertEqual(ab.cells(title), width)
+                top = "─" * (60 - width) + title
+                screen = f"output\n{top}\n❯ \n" + "─" * 60 + "\n"
+                self.assertEqual(ab.observe_input(screen), ab.INPUT_EMPTY)
+
+    def test_multiline_typed_text_is_other_text(self) -> None:
+        self.assertEqual(ab.observe_input(claude_titled_screen("line one\n  line two")),
+                         ab.INPUT_OTHER_TEXT)
+
+    def test_a_titled_box_is_not_an_antigravity_box(self) -> None:
+        plain, _solid = ab.split_dim(claude_titled_screen(""))
+        self.assertIsNone(ab.antigravity_input(plain))
+        self.assertIsNone(ab.RULE_RE.match(ab.ANSI_RE.sub("", CLAUDE_TITLED_RULE)))
+
 
 class TestReadInput(unittest.TestCase):
     """observe_input reads the input box and nothing else. The bug it replaces:

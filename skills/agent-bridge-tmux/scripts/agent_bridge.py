@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -1756,6 +1757,9 @@ INPUT_UNKNOWN = "unknown"
 
 SGR_RE = re.compile(r"\x1b\[([0-9;:]*)m")
 RULE_RE = re.compile(r"^\s*─{8,}\s*$")
+# Claude Code's top input-box border when the session has a name: the rule
+# carries it near its right end, "──────── name ─".
+CLAUDE_TITLED_RULE_RE = re.compile(r"^─{8,} \S(?:.*\S)? ─+$")
 CLAUDE_PROMPT = "❯"
 CODEX_PROMPT = "›"
 ANTIGRAVITY_PROMPT = ">"
@@ -1807,16 +1811,72 @@ def split_dim(capture: str) -> tuple[list[str], list[str]]:
     return "".join(plain).split("\n"), "".join(solid).split("\n")
 
 
+ZERO_WIDTH_JOINER = "\u200d"
+EMOJI_PRESENTATION = "\ufe0f"
+
+
+def cells(text: str) -> int:
+    """Terminal columns that text takes up, counted per character group the
+    way agent UIs size their rows. A wide character takes two columns. A mark
+    that joins the character before it takes none: a combining accent, a
+    variation selector, a skin-tone modifier, or a zero-width joiner and the
+    character it joins on. An emoji-presentation selector widens a narrow
+    character to two."""
+    width = 0
+    last = 0
+    joined = False
+    for char in text:
+        if joined:
+            joined = False
+            continue
+        if char == ZERO_WIDTH_JOINER:
+            joined = True
+            continue
+        if char == EMOJI_PRESENTATION:
+            width += 2 - last if last == 1 else 0
+            last = 2 if last else 0
+            continue
+        if (unicodedata.combining(char) or unicodedata.category(char) in ("Mn", "Me", "Cf")
+                or "\ufe00" <= char <= "\ufe0f" or "\U0001f3fb" <= char <= "\U0001f3ff"):
+            continue
+        last = 2 if unicodedata.east_asian_width(char) in "WF" else 1
+        width += last
+    return width
+
+
+def claude_titled_box(top: str, bottom: str) -> bool:
+    """Whether a titled top rule and the closing rule frame a live input box.
+
+    Claude Code draws both rules from the first column across the full width
+    of the pane, so they take up the same number of columns. That rejects a
+    titled box quoted in the transcript only when the quote is indented or its
+    rows differ in width; Claude Code indents its own transcript. A quote at
+    the first column with rows of equal width is still accepted, as a quote of
+    an untitled box always was.
+    """
+    top, bottom = top.rstrip(), bottom.rstrip()
+    return (bool(CLAUDE_TITLED_RULE_RE.match(top)) and bottom.startswith("─")
+            and cells(top) == cells(bottom))
+
+
 def claude_input(plain: list[str]) -> tuple[int, int] | None:
     """Rows of Claude Code's input box: a ❯ row directly under a horizontal
-    rule, through the row before the next rule. The last such box on screen is
-    the live one; the transcript echoes past prompts without the rules."""
+    rule, through the row before the next rule. The top rule may carry the
+    session name; see claude_titled_box. The last such box on screen is the
+    live one; the transcript echoes past prompts without the rules."""
     for start in range(len(plain) - 1, 0, -1):
-        if plain[start].lstrip().startswith(CLAUDE_PROMPT) and RULE_RE.match(plain[start - 1]):
-            for end in range(start + 1, len(plain)):
-                if RULE_RE.match(plain[end]):
-                    return start, end
-            return None
+        if not plain[start].lstrip().startswith(CLAUDE_PROMPT):
+            continue
+        top = plain[start - 1]
+        titled = not RULE_RE.match(top)
+        if titled and not CLAUDE_TITLED_RULE_RE.match(top.rstrip()):
+            continue
+        for end in range(start + 1, len(plain)):
+            if RULE_RE.match(plain[end]):
+                if titled and not claude_titled_box(top, plain[end]):
+                    return None
+                return start, end
+        return None
     return None
 
 
