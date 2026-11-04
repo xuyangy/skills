@@ -555,8 +555,15 @@ For every other ending, stop sending and ask. Two kinds reach here:
 Do not quietly retry and do not quietly give up. Say which ending it was, on
 which turn, and what the exchange had reached. Then put exactly two options to
 the user through the harness's question tool, e.g. `AskUserQuestion` in Claude
-Code, and wait. Fall back to a numbered list only where no such tool exists. The
-options are:
+Code, or `request_user_input` in Codex, and wait. Codex offers
+`request_user_input` outside Plan mode only when the
+`default_mode_request_user_input` feature is on.
+
+Where no question tool is available, write the two options as a numbered list,
+ask the user to reply with `1` or `2`, and end your turn. A list in your message
+is not a pending question: never tell the user to answer "in the pending
+question" or a picker unless a question tool call is actually open. The options
+are:
 
 1. **Continue.** Run `start --fresh` to open a *new* bridge to the same pane. The
    new body must carry the exchange forward: what had been established, what
