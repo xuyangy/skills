@@ -64,6 +64,10 @@ Stop, report, and wait for the human when any of these happens:
   `agent-bridge-tmux` and ask the human; do not open the next bridge on your own.
 - **The next step needs the human.** See *Limits*.
 
+When you ask the human, follow the question-tool rule in `agent-bridge-tmux`
+(*Ending is the user's call, not yours*): use the harness's question tool, or,
+where none is available, write a numbered list and end your turn.
+
 The human can stop the loop at any time with the bridge's abort sentinel or by
 typing in your pane. A human message always wins over the loop.
 
