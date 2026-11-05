@@ -1838,11 +1838,42 @@ def wait_settled(target: str) -> None:
         time.sleep(SETTLE_PAUSE)
 
 
+def wait_frame_settled(target: str) -> bool:
+    """After the first paste, wait for the frame to land and hold still.
+
+    Returns True only when two reads SETTLE_PAUSE apart show the frame in the
+    same input box. An empty box never counts: a paste the TUI has not drawn
+    yet looks exactly like that. Anything other than the frame resets the
+    match. One monotonic deadline of SETTLE_TIMEOUT after the SUBMIT_DELAY
+    floor covers arrival and settling; when it passes, the result is False,
+    and the caller must not submit.
+    """
+    time.sleep(SUBMIT_DELAY)
+    previous = None
+    deadline = time.monotonic() + SETTLE_TIMEOUT
+    while time.monotonic() < deadline:
+        current = capture_pane_text(target, escapes=True, check=False)
+        # A capture can outlast the budget; its late result proves nothing.
+        if current.returncode != 0 or time.monotonic() >= deadline:
+            return False
+        box = input_box(current.stdout)
+        if box is not None and observe_input(current.stdout) == INPUT_HOLDS_FRAME:
+            if box == previous:
+                return True
+            previous = box
+        else:
+            previous = None
+        time.sleep(min(SETTLE_PAUSE, max(0.0, deadline - time.monotonic())))
+    return False
+
+
 # What read_input finds in the target's input box.
 INPUT_EMPTY = "empty"
 INPUT_HOLDS_FRAME = "holds_frame"
 INPUT_OTHER_TEXT = "other_text"
 INPUT_UNKNOWN = "unknown"
+# Not a read_input result: the frame is in the box but never held still.
+INPUT_NOT_SETTLED = "not_settled"
 
 SGR_RE = re.compile(r"\x1b\[([0-9;:]*)m")
 RULE_RE = re.compile(r"^\s*─{8,}\s*$")
@@ -2239,13 +2270,15 @@ def deliver(target: str, msg: str, submit_key: str = "Enter") -> str:
                 f"AGENT_BRIDGE_INPUT_MODE=tail."
             )
         type_into(target, msg)
-        wait_settled(target)
+        settled = wait_frame_settled(target)
         seen = read_input(target)
-        if seen != INPUT_HOLDS_FRAME:
+        if not settled or seen != INPUT_HOLDS_FRAME:
             # Enter is withheld: with the frame not in the input box, it would
-            # answer whatever is on screen instead.
+            # answer whatever is on screen instead. A frame that never held
+            # still may still be mid-paste, where an Enter gets absorbed.
             fallback = recovery_key(submit_key)
-            raise DeliveryUncertain("uncertain", uncertain_message(target, seen, fallback), fallback)
+            state = seen if seen != INPUT_HOLDS_FRAME else INPUT_NOT_SETTLED
+            raise DeliveryUncertain("uncertain", uncertain_message(target, state, fallback), fallback)
         submit_key = press_submit(target, submit_plan)
 
         if SUBMIT_ATTEMPTS <= 1:
@@ -2290,7 +2323,9 @@ def uncertain_message(target: str, seen: str, submit_key: str = "Enter") -> str:
     where = {INPUT_EMPTY: "its input box is empty, so the frame was either "
                           "submitted or discarded",
              INPUT_OTHER_TEXT: "its input box holds other text",
-             INPUT_UNKNOWN: "its screen no longer shows an input box this can read"}
+             INPUT_UNKNOWN: "its screen no longer shows an input box this can read",
+             INPUT_NOT_SETTLED: "the frame is in its input box but did not hold still "
+                                "in time, so nothing was pressed"}
     return (
         f"the frame was typed into {target}, and delivery is uncertain: "
         f"{where.get(seen, seen)}. This bridge stays pending, so if the frame did "

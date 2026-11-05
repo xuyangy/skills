@@ -231,3 +231,127 @@ class TestBusyQueue(BusyQueueCase):
             _, result = self.start()
         self.assertEqual(self.keys, ["Tab"])
         self.assertEqual(result["delivery"], "delivered")
+
+
+class TestFirstPasteSettling(BusyQueueCase):
+    """The first paste must land in the input box and hold still before submit.
+
+    The transcript changes on every capture, so only the input box can settle.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.render_after = 0
+        self.pasted_at = None
+        self.frames = []
+
+    def type_frame(self, target, frame):
+        self.typed.append(frame)
+        self.pasted_at = self.captures
+        self.frames.append(frame)
+
+    def capture(self, *args, **kwargs):
+        if (self.pasted_at is not None and not self.submitted and not self.draft
+                and self.captures - self.pasted_at >= self.render_after):
+            self.draft = self.frames[-1]
+        return super().capture(*args, **kwargs)
+
+    def test_delayed_render_waits_past_matching_empty_reads(self):
+        self.render_after = 4
+        with fake_clock():
+            _, result = self.start()
+        self.assertEqual(result["delivery"], "delivered")
+        self.assertEqual(len(self.typed), 1)
+        self.assertEqual(self.keys, ["Tab"])
+
+    def test_frame_that_never_renders_times_out_without_a_key(self):
+        self.render_after = 10 ** 9
+        with fake_clock() as elapsed, self.assertRaises(ab.DeliveryUncertain) as caught:
+            self.start()
+        self.assertEqual(caught.exception.delivery, "uncertain")
+        self.assertEqual(self.keys, [])
+        self.assertEqual(len(self.typed), 1)
+        self.assertLess(elapsed(), 60 + ab.SUBMIT_DELAY + ab.SETTLE_TIMEOUT + 2 * ab.SETTLE_PAUSE)
+        state = ab.load_state(make_identity(self.root, "%1"))
+        self.assertEqual(state["status"], "pending")
+        self.assertEqual(state["delivery"], "uncertain")
+
+    def test_timeout_wins_over_a_final_read_that_shows_the_frame(self):
+        with mock.patch.object(ab, "wait_frame_settled", return_value=False), fake_clock():
+            with self.assertRaises(ab.DeliveryUncertain) as caught:
+                self.start()
+        self.assertEqual(self.keys, [])
+        self.assertIn("did not hold still", str(caught.exception))
+
+    def test_retry_settling_still_sees_an_empty_box_as_submitted(self):
+        # The first Tab is not taken, so the first confirmation read still
+        # holds the frame. The box then empties inside the real retry
+        # wait_settled, as when the TUI submits on its own.
+        self.accept = False
+        settling = []
+        original_settled = ab.wait_settled
+        original_capture = self.capture
+
+        def settled(target):
+            settling.append(target)
+            return original_settled(target)
+
+        def capture(*args, **kwargs):
+            if settling and self.draft:
+                self.draft = ""
+                self.submitted = True
+            return original_capture(*args, **kwargs)
+
+        with mock.patch.object(ab, "wait_settled", side_effect=settled), \
+                mock.patch.object(ab, "capture_pane_text", side_effect=capture), fake_clock():
+            _, result = self.start()
+        self.assertEqual(settling, ["%2"])
+        self.assertEqual(result["delivery"], "delivered")
+        self.assertEqual(self.keys, ["Tab"])
+
+
+class TestWaitFrameSettled(BusyQueueCase):
+    """wait_frame_settled counts only consecutive matching reads of the frame."""
+
+    def scripted(self, drafts):
+        reads = iter(drafts)
+        last = [drafts[-1]]
+
+        def capture(*args, **kwargs):
+            self.draft = next(reads, last[0])
+            return BusyQueueCase.capture(self)
+
+        return mock.patch.object(ab, "capture_pane_text", side_effect=capture)
+
+    def test_empty_box_never_settles(self):
+        with self.scripted([""]), fake_clock() as elapsed:
+            self.assertFalse(ab.wait_frame_settled("%2"))
+        self.assertGreaterEqual(elapsed(), ab.SUBMIT_DELAY + ab.SETTLE_TIMEOUT)
+
+    def test_frame_that_disappears_resets_the_match(self):
+        frame = f"Review this {ab.FRAME_END}"
+        with self.scripted([frame, "", frame, frame]), fake_clock():
+            self.assertTrue(ab.wait_frame_settled("%2"))
+        # frame, empty (resets), frame, frame: settled on the fourth read.
+        self.assertEqual(self.captures, 4)
+
+    def test_frame_that_keeps_flickering_never_settles(self):
+        frame = f"Review this {ab.FRAME_END}"
+        with self.scripted([frame, ""] * 50), fake_clock():
+            self.assertFalse(ab.wait_frame_settled("%2"))
+
+    def test_matching_capture_that_returns_after_the_deadline_is_rejected(self):
+        frame = f"Review this {ab.FRAME_END}"
+        reads = 0
+
+        def capture(*args, **kwargs):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                ab.time.sleep(ab.SETTLE_TIMEOUT + 1)
+            self.draft = frame
+            return BusyQueueCase.capture(self)
+
+        with mock.patch.object(ab, "capture_pane_text", side_effect=capture), fake_clock():
+            self.assertFalse(ab.wait_frame_settled("%2"))
+        self.assertEqual(reads, 2)

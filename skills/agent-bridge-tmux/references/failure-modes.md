@@ -156,26 +156,28 @@ when it uses Send Immediately, or its supported rebound key. Invalid tokens
 refuse before paste. This declares a target binding; it does not detect the
 target's effective settings. No settings file or delivery hint is consulted.
 
-Antigravity's `? for shortcuts` footer establishes idle and selects Enter,
-even if the completed transcript quotes `esc to cancel`. The actual busy
-footer (`esc to cancel`) selects the configured queue key. A missing footer,
-including the 1.5.1 working screen showing `Reading file...` and a tip, never
-establishes idle. Unknown activity can receive only through an explicitly
-configured queue binding. The composer and activity are checked again before
-each retry without another paste. Unknown composer screens remain uncertain.
-Recovery text always names both keys: Enter if the agent is idle, or the
-declared queue key if it is still working. A key an earlier attempt pressed
-shows what the agent was doing then, not when a human looks, so it is reported
-only as history. If the human cannot tell, they do not guess. `C-c` and `C-z` are refused as queue keys before
-paste, because they interrupt or suspend a working agent.
+Antigravity's `? for shortcuts` footer establishes idle and selects Enter, even
+if the completed transcript quotes `esc to cancel`. The actual busy footer
+(`esc to cancel`) selects the configured queue key. A missing footer, including
+the 1.5.1 working screen showing `Reading file...` and a tip, never establishes
+idle. Unknown activity can receive only through an explicitly configured queue
+binding. The composer and activity are checked again before each retry without
+another paste. Unknown composer screens remain uncertain. Recovery text always
+names both keys: Enter if the agent is idle, or the declared queue key if it is
+still working. A key an earlier attempt pressed shows what the agent was doing
+then, not when a human looks, so it is reported only as history. If the human
+cannot tell, they do not guess. `C-c` and `C-z` are refused as queue keys
+before paste, because they interrupt or suspend a working agent.
 
 Other targets, tail mode, and sends with submission verification disabled keep
-the idle gate. Set `AGENT_BRIDGE_BUSY_MODE=idle` for a custom keymap or a harness
-version without queue support. An occupied or unreadable composer never
-qualifies for busy delivery. `not ready` means the helper is waiting and will
-re-check: it backs off 2s, 4s, 8s, 15s, then every 30s, for up to
-`AGENT_BRIDGE_READY_TIMEOUT` seconds (default 900). Let it run; do not kill the
-command and do not resend.
+the idle gate. Set `AGENT_BRIDGE_BUSY_MODE=idle` for a custom keymap or a
+harness version without queue support. `AGENT_BRIDGE_BUSY_MODE=idle` disables
+busy delivery; Antigravity still requires its recognised `? for shortcuts` idle
+footer. A missing or unrecognised footer does not qualify as idle. An occupied
+or unreadable composer never qualifies for busy delivery. `not ready` means the
+helper is waiting and will re-check: it backs off 2s, 4s, 8s, 15s, then every
+30s, for up to `AGENT_BRIDGE_READY_TIMEOUT` seconds (default 900). Let it run;
+do not kill the command and do not resend.
 
 The error above is raised only when that whole budget passed without the pane
 ever meeting its readiness check. Real causes: an unsupported peer is generating

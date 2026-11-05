@@ -1718,6 +1718,7 @@ class TestAntigravityDelivery(unittest.TestCase):
                                                          stdout=self.next_screen())
         for name, value in (("type_into", lambda *_a, **_k: self.type()),
                             ("wait_settled", lambda *_a, **_k: None),
+                            ("wait_frame_settled", lambda *_a, **_k: True),
                             ("press_enter", lambda *_a, **_k: self.enter()),
                             ("capture_pane_text", capture),
                             ("Focus", lambda *_a, **_k: contextlib.nullcontext()),
@@ -1774,6 +1775,7 @@ class TestScreenDelivery(unittest.TestCase):
         self.reads: list[str] = []
         for name, value in (("type_into", lambda *_a, **_k: self.type()),
                             ("wait_settled", lambda *_a, **_k: None),
+                            ("wait_frame_settled", lambda *_a, **_k: True),
                             ("press_enter", lambda *_a, **_k: self.enter()),
                             ("read_input", lambda *_a, **_k: self.next_read()),
                             ("Focus", lambda *_a, **_k: contextlib.nullcontext()),
