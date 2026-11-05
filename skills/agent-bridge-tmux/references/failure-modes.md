@@ -254,9 +254,14 @@ that burst becomes a line break in the buffer instead of a submit.
 
 Two consequences shape the fix, and the second is the counter-intuitive one:
 
-1. Wait before pressing the submit key. `wait_settled` polls the recognised
-   composer until it settles, so transcript output can continue while the paste
-   finishes being ingested. Unknown UIs use whole-screen stability.
+1. Wait before pressing the submit key. Before the first press in screen
+   mode, `wait_frame_settled` waits until two reads show the frame in the same
+   recognised input box. An empty box never counts, because a paste the TUI
+   has not drawn yet looks the same. When its deadline passes, nothing is
+   pressed and delivery is `uncertain`. Before each retry press, and in tail
+   mode, `wait_settled` waits for the input box, or the whole screen for an
+   unknown UI, to stop changing; there an empty box can mean the frame was
+   submitted. Transcript output can continue during either wait.
 2. **Do not hammer Enter.** Paste detection is a timer that fresh input
    restarts, so fast retries hold the window open and guarantee the stall.
    Observed live: three presses a second apart were all absorbed, then a single

@@ -219,8 +219,9 @@ observed `? for shortcuts` footer establishes idle and selects Enter; `esc to
 cancel` is busy, and a missing footer is unknown. Busy or unknown activity uses
 the explicitly configured key. Quoted transcript text, pasted payloads, and
 wrapped draft rows cannot affect this decision. An unreadable or changed
-composer after paste stays `delivery=uncertain`, with no duplicate paste and
-manual guidance naming the selected key.
+composer after paste stays `delivery=uncertain`, with no duplicate paste. The
+manual guidance names both keys: Enter if the agent is idle, or the declared
+queue key if it is still working.
 
 Other UIs, `AGENT_BRIDGE_INPUT_MODE=tail`, and sends with submission verification
 disabled (`AGENT_BRIDGE_SUBMIT_ATTEMPTS=1`) require an idle, stable pane.

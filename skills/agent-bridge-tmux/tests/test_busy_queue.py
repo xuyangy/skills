@@ -142,10 +142,17 @@ class TestBusyQueue(BusyQueueCase):
         self.assertEqual(self.keys, [])
 
     def test_unknown_and_unsupported_composers_keep_idle_gate(self):
-        for screen in (lambda draft, **kw: "permission dialog\n",):
-            with self.subTest(screen=screen), fake_clock():
+        # The transcript above keeps changing, so only the idle gate in
+        # wait_ready can refuse; deliver's own pre-paste check is never reached.
+        screens = {
+            "permission dialog": lambda draft, above="", **kw: f"{above}permission dialog\n",
+            "shell prompt": lambda draft, above="", **kw: f"{above}$ {draft}\n",
+        }
+        for name, screen in screens.items():
+            with self.subTest(screen=name), fake_clock(), \
+                    mock.patch.object(ab, "deliver", side_effect=AssertionError("delivered")):
                 self.screen = screen
-                with self.assertRaises(ab.PeerNotReady):
+                with self.assertRaisesRegex(ab.PeerNotReady, "did not reach a confirmed idle prompt"):
                     self.start()
         self.assertEqual(self.typed, [])
         self.assertEqual(self.keys, [])
