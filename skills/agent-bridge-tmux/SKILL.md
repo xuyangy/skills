@@ -32,6 +32,8 @@ tense, with its actual `OUTBOUND` line, or report the concrete failure.
 the frame to the pane; it does **not** establish that the receiving helper
 accepted it or that the agent processed the body. The peer's validated reply
 acknowledges it. If acceptance is unclear, run `status`; do not send a duplicate.
+For a busy harness, transport delivery can mean the harness queued the message.
+It does not mean the current task finished or the queued message has been read.
 `delivery=unconfirmed` means `AGENT_BRIDGE_SUBMIT_ATTEMPTS=1` skipped the check;
 `status` keeps a `delivery_note` for it until the peer replies.
 An `UNCERTAIN` line instead of `OUTBOUND` means the frame was typed into the
@@ -183,16 +185,57 @@ mentioned.
    not ask the human to paste the reply; it arrives in this pane automatically.
    Then end your turn, so your pane goes idle and B's reply can land.
 
-If the target pane is busy, the helper prints `not ready` and waits, re-checking
-with a growing backoff for up to 15 minutes (`AGENT_BRIDGE_READY_TIMEOUT`). That
-is normal for a peer mid-turn: let the command run, do not interrupt it and do
-not resend. It only fails once that whole budget is spent.
+Claude Code and Codex can accept messages while working. With the default
+`AGENT_BRIDGE_BUSY_MODE=queue`, a recognised empty composer is sufficient:
+the helper checks the input area twice, pastes once, checks that the frame
+landed, submits, and confirms the input area emptied. Changing transcript
+output does not block admission or paste settling. Claude Code uses Enter;
+Codex uses Tab, which queues while busy and submits if the turn has ended.
+These paths do not inject interrupt keys. See the harness behavior in
+[Claude Code's queue documentation](https://code.claude.com/docs/en/interactive-mode#queue-messages-while-claude-works)
+and [Codex's composer](https://github.com/openai/codex/blob/main/codex-rs/tui/src/bottom_pane/chat_composer.rs).
+
+Antigravity is idle-only unless `AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY` explicitly
+declares the **target pane's** busy queue binding for that helper invocation:
+
+| Target configuration | Variable value |
+| --- | --- |
+| Queued Messages: Queue | `Enter` |
+| Queued Messages: Send Immediately, standard opposite-action shortcut | `M-m` (Alt+M) |
+| Rebound queue shortcut | Its supported tmux key token |
+| Unknown binding, unset variable, or empty value | Wait for idle before pasting |
+
+Supported tokens are `Enter`, `Tab`, `M-[a-z]`, `C-[a-z]`, and `M-Enter`.
+`C-c` (interrupt) and `C-z` (suspend) are reserved and refused. Invalid or
+reserved values such as `alt+m` or `C-c` fail before paste without consuming
+a turn.
+Set the value to match the actual target; a mismatched binding can steer its
+active turn. Different target panes may need different values. See
+[Antigravity's settings](https://antigravity.google/docs/settings?tab=cli).
+
+The helper reads neither settings files nor a delivery-mode hint. Before each
+Antigravity submit attempt it rechecks the recognised composer and footer. The
+observed `? for shortcuts` footer establishes idle and selects Enter; `esc to
+cancel` is busy, and a missing footer is unknown. Busy or unknown activity uses
+the explicitly configured key. Quoted transcript text, pasted payloads, and
+wrapped draft rows cannot affect this decision. An unreadable or changed
+composer after paste stays `delivery=uncertain`, with no duplicate paste and
+manual guidance naming the selected key.
+
+Other UIs, `AGENT_BRIDGE_INPUT_MODE=tail`, and sends with submission verification
+disabled (`AGENT_BRIDGE_SUBMIT_ATTEMPTS=1`) require an idle, stable pane.
+Set `AGENT_BRIDGE_BUSY_MODE=idle` for custom composer bindings or harness
+versions without the documented queue behavior. The helper then uses the idle
+gate and Enter. Unknown screens and occupied input boxes never qualify for
+busy delivery. A readiness wait prints `not ready` and re-checks with a growing
+backoff for up to 15 minutes (`AGENT_BRIDGE_READY_TIMEOUT`); let the command run
+and do not resend while it is waiting.
 
 The helper mints a random `bridge` token that pairs the two of you for this
-exchange, waits for the target to be idle, checks the abort sentinels, frames the
+exchange, waits for a ready input area, checks the abort sentinels, frames the
 body, and logs it. Delivery is deliberately more than one `send-keys`: the
 payload goes in as one atomic bracketed paste (`load-buffer` + `paste-buffer
--p -d`, so no key lookup and no per-character pacing), then Enter is pressed
+-p -d`, so no key lookup and no per-character pacing), then the submit key is pressed
 separately as a key and the helper confirms
 the frame actually left the input box, backing off between retries. That whole
 dance is the reason to use the helper instead of hand-rolled `send-keys`.
@@ -428,6 +471,12 @@ A request is not a close. Until the confirmation arrives, the requester still
 answers every frame. The confirmation is the last frame: the agent that sent it
 sends nothing more, and the agent that receives it replies to it with nothing.
 
+After a delivered close request, the requester may continue already agreed
+work: a supported harness can queue the confirmation while it works. It still
+answers a reply that declines closure. Receive and read the confirmation before
+resetting or opening another bridge. Close confirmations use ordinary `reply`
+and `receive`, with the same delivery and evidence reporting as other messages.
+
 The helper does not see the handshake, so after it both panes still hold
 `pending` or `awaiting_reply` state. Each agent runs `reset` once the close is
 confirmed — the confirmer after its `reply`, the requester after its `receive` —
@@ -476,8 +525,9 @@ queue — worse than a stall, and much harder to read afterwards.
 
 ## A peer that is not ready
 
-`not ready (check N); waiting Ns` on stderr means the peer pane is busy and the
-helper is waiting for it. That is the normal shape of a peer mid-turn. Let the
+`not ready (check N); waiting Ns` on stderr means the peer has no confirmed
+ready input area and the helper is waiting for it. Supported queue composers
+can qualify while busy; other targets must go idle. Let the
 command run to the end. Do not interrupt it, do not resend, and never treat it
 as an ending.
 

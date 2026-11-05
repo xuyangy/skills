@@ -33,6 +33,10 @@ Keep the same pane for the whole loop.
    and your pick. The reviewer agrees or argues for another. Settle it in that
    bridge, then close it. An item is one change the reviewer can check in one
    read; split anything bigger and agree the first part.
+   Once a close request is delivered, you may begin the agreed implementation
+   while its confirmation queues in your harness. Receive and read the
+   confirmation and reset the closed bridge before opening the review bridge;
+   address any reply declining closure in the current exchange.
 2. **Do it.** Make the change and run the checks the repo has. Do not open a
    bridge while you work.
 3. **Get it reviewed.** Open a new bridge. Send what changed, why, the absolute

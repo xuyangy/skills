@@ -1826,7 +1826,7 @@ class TestScreenDelivery(unittest.TestCase):
             ab.deliver("%2", "frame")
         self.assertEqual(caught.exception.delivery, "unsent")
         self.assertEqual(self.enters, 4)
-        self.assertIn("Press Enter there", str(caught.exception))
+        self.assertIn("by hand, press Enter there", str(caught.exception))
 
     def test_an_unreadable_screen_after_enter_is_uncertain_without_more_enters(self) -> None:
         self.reads = [ab.INPUT_EMPTY, ab.INPUT_HOLDS_FRAME, ab.INPUT_UNKNOWN]

@@ -119,6 +119,10 @@ SUBMIT_ATTEMPTS = int(os.environ.get("AGENT_BRIDGE_SUBMIT_ATTEMPTS", "4"))
 # before anything is typed. "tail" is the heuristic for any other target: the bottom
 # INPUT_TAIL_LINES non-blank lines stand in for the input box.
 INPUT_MODE = os.environ.get("AGENT_BRIDGE_INPUT_MODE", "screen")
+# Supported composers accept queued input while their transcript is changing.
+# Set to idle for a harness version or custom keymap that requires an idle,
+# stable pane before delivery.
+BUSY_MODE = os.environ.get("AGENT_BRIDGE_BUSY_MODE", "queue")
 # Tail mode only. The input box occupies only the bottom few lines. Looking
 # wider would catch the message again after it scrolled up into the transcript,
 # and read a delivered frame as a stuck one — which is exactly what happened at
@@ -1510,7 +1514,7 @@ def close_viewer(target: str, viewer: str, capture: str) -> bool:
 
 
 class PeerNotReady(BridgeError):
-    """The peer pane never went idle, so NOTHING was delivered.
+    """The peer pane has no confirmed ready input, so NOTHING was delivered.
 
     Separate from every other delivery failure because of what the caller may do
     next: no keystroke reached the peer and no turn was consumed, so re-running
@@ -1532,9 +1536,10 @@ class DeliveryUncertain(BridgeError):
     "uncertain" when the screen could not show where it went.
     """
 
-    def __init__(self, delivery: str, message: str) -> None:
+    def __init__(self, delivery: str, message: str, submit_key: str = "Enter") -> None:
         super().__init__(message)
         self.delivery = delivery
+        self.submit_key = submit_key
 
 
 def ready_step(attempt: int) -> float:
@@ -1564,12 +1569,11 @@ def sleep_watching_abort(seconds: float, identity: dict[str, str] | None) -> Non
 
 
 def wait_ready(target: str, timeout: float = READY_TIMEOUT,
-               identity: dict[str, str] | None = None) -> None:
-    """Idle wording plus a still screen. Either alone is too weak: a pane can be
-    quiet mid-render, and a pane can be motionless while showing a busy line.
+               identity: dict[str, str] | None = None) -> str | None:
+    """Return a queue submit key for a supported empty composer, else wait idle.
 
-    A busy peer is waited out rather than aborted on: re-check until the pane
-    goes idle, a human aborts, or the deadline passes.
+    Queue readiness compares the input area alone, so changing output does not
+    hold up delivery. Other targets require idle wording and a still screen.
 
     The deadline is one monotonic wall-clock span covering everything this
     function does — captures, stability pauses and sleeps alike. Budgeting only
@@ -1609,8 +1613,26 @@ def wait_ready(target: str, timeout: float = READY_TIMEOUT,
                 print(f"agent-bridge: closed the {viewer} on {target} to deliver",
                       file=sys.stderr)
                 continue
-        if viewer is None and first == second and looks_ready(second):
-            return
+        if viewer is None:
+            visible_box = input_box(second)
+            antigravity = bool(visible_box and visible_box[0] == ANTIGRAVITY_PROMPT)
+            configured = (antigravity_configured_key()
+                          if antigravity and INPUT_MODE == "screen" and BUSY_MODE == "queue" else None)
+            idle = antigravity_idle(second) if antigravity else looks_ready(second)
+            if first == second and idle:
+                if (visible_box and INPUT_MODE == "screen" and BUSY_MODE == "queue"
+                        and SUBMIT_ATTEMPTS > 1):
+                    if visible_box[0] == CODEX_PROMPT:
+                        return "Tab"
+                    if antigravity and configured:
+                        return ANTIGRAVITY_QUEUE_KEY
+                return None
+            key = (queue_ready(target, deadline)
+                   if visible_box and visible_box[0] in (CLAUDE_PROMPT, CODEX_PROMPT, ANTIGRAVITY_PROMPT) else None)
+            if key is not None:
+                return key
+            if time.monotonic() >= deadline:
+                break
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
@@ -1729,8 +1751,73 @@ def press_enter(target: str) -> None:
     run_tmux(["send-keys", "-t", target, "Enter"])
 
 
+def submit_key_label(key: str) -> str:
+    if key == ANTIGRAVITY_QUEUE_KEY or key.startswith(ANTIGRAVITY_QUEUE_KEY + ":"):
+        # No key was confirmed against the screen, so name both outcomes.
+        configured = key.partition(":")[2]
+        queue = (f"{submit_key_label(configured)} (the declared queue key)"
+                 if configured else "the declared queue key")
+        return f"Enter if that agent is idle, or {queue} if it is still working"
+    if key.startswith(("M-", "C-")):
+        modifier, name = key.split("-", 1)
+        return ("Alt+" if modifier == "M" else "Ctrl+") + (name.upper() if len(name) == 1 else name)
+    return key
+
+
+def press_instruction(key: str) -> str:
+    """What a human presses by hand to submit a frame left in the input box.
+
+    An Antigravity plan names both keys, because which one is right depends on
+    whether the agent is working when the human looks, not when the helper did.
+    """
+    if key == ANTIGRAVITY_QUEUE_KEY or key.startswith(ANTIGRAVITY_QUEUE_KEY + ":"):
+        return (f"press {submit_key_label(key)}. If you cannot tell whether it is "
+                f"working, do not guess")
+    return f"press {submit_key_label(key)} there"
+
+
+def recovery_key(key: str) -> str:
+    """The key a human should press by hand, carried into state and messages.
+
+    The Antigravity plan is not a key. When no key was resolved, it becomes the
+    plan plus the declared binding, so the recovery text can name a real key.
+    """
+    if key != ANTIGRAVITY_QUEUE_KEY:
+        return key
+    return f"{ANTIGRAVITY_QUEUE_KEY}:{os.environ.get('AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY', '')}"
+
+
+def press_submit(target: str, key: str, last: str | None = None) -> str:
+    """Press the submit key; resolve the Antigravity plan against the screen.
+
+    `last` is the key a previous attempt pressed. It is reported as history
+    only; the recovery action still names both keys.
+    """
+    if key == ANTIGRAVITY_QUEUE_KEY:
+        capture = capture_pane_text(target, escapes=True, check=False)
+        resolved = antigravity_queue_key(capture.stdout) if capture.returncode == 0 else None
+        if resolved is None:
+            fallback = recovery_key(key)
+            history = (f"The previous attempt pressed {submit_key_label(last)}. "
+                       if last and last != ANTIGRAVITY_QUEUE_KEY else "")
+            raise DeliveryUncertain(
+                "uncertain", f"the frame was pasted into {target}, but its Antigravity queue key "
+                f"could not be confirmed. Nothing was submitted by this attempt. {history}"
+                f"Look at that pane: if the frame is sitting in its input box, "
+                f"{press_instruction(fallback)}. "
+                "Check the composer and AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY. "
+                "Do not paste another copy.",
+                fallback)
+        key = resolved
+    if key == "Enter":
+        press_enter(target)
+    else:
+        run_tmux(["send-keys", "-t", target, "--", key])
+    return key
+
+
 def wait_settled(target: str) -> None:
-    """Block until the pane stops changing, so input has finished being ingested.
+    """Wait for the composer to settle independently of streaming output.
 
     A fixed sleep guesses; this measures. A TUI mid-paste is still repainting,
     and that is exactly when an Enter gets absorbed. SUBMIT_DELAY is the floor,
@@ -1740,12 +1827,14 @@ def wait_settled(target: str) -> None:
     previous = None
     deadline = time.time() + SETTLE_TIMEOUT
     while time.time() < deadline:
-        current = capture_pane_text(target, check=False)
+        current = capture_pane_text(target, escapes=True, check=False)
         if current.returncode != 0:
             return
-        if current.stdout == previous:
+        box = input_box(current.stdout) if INPUT_MODE == "screen" else None
+        signature = box if box is not None else current.stdout
+        if signature == previous:
             return
-        previous = current.stdout
+        previous = signature
         time.sleep(SETTLE_PAUSE)
 
 
@@ -1763,6 +1852,11 @@ CLAUDE_TITLED_RULE_RE = re.compile(r"^─{8,} \S(?:.*\S)? ─+$")
 CLAUDE_PROMPT = "❯"
 CODEX_PROMPT = "›"
 ANTIGRAVITY_PROMPT = ">"
+ANTIGRAVITY_QUEUE_KEY = "antigravity-queue"
+ANTIGRAVITY_CONFIG_KEY_RE = re.compile(r"(?:Enter|Tab|M-[a-z]|C-[a-z]|M-Enter)")
+# Interrupt and suspend. Sent into a working pane, they stop the peer's turn or
+# its process instead of queueing the frame.
+ANTIGRAVITY_RESERVED_KEYS = {"C-c": "interrupts", "C-z": "suspends"}
 # Codex draws its status line, and at most a warning or two, under the input
 # box. More than this below the prompt row means the row is not the input box.
 CODEX_FOOTER_LINES = 4
@@ -1911,6 +2005,96 @@ def antigravity_input(plain: list[str]) -> tuple[int, int] | None:
     return (top + 1, bottom) if plain[top + 1].startswith(ANTIGRAVITY_PROMPT) else None
 
 
+def input_box(capture: str) -> tuple[str, str, str] | None:
+    """The lowest recognised composer's prompt, visible text and non-dim text."""
+    plain, solid = split_dim(capture)
+    found = [(box, prompt) for box, prompt in ((claude_input(plain), CLAUDE_PROMPT),
+                                               (codex_input(plain), CODEX_PROMPT),
+                                               (antigravity_input(plain), ANTIGRAVITY_PROMPT))
+             if box]
+    if not found:
+        return None
+    (start, end), prompt = max(found)
+    return prompt, "\n".join(plain[start:end]), "\n".join(solid[start:end])
+
+
+def antigravity_configured_key() -> str | None:
+    """The sender's explicit declaration of the target pane's busy queue key."""
+    key = os.environ.get("AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY", "")
+    if not key:
+        return None
+    if not ANTIGRAVITY_CONFIG_KEY_RE.fullmatch(key):
+        raise PeerNotReady(
+            "invalid AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY: use Enter, Tab, M-[a-z], "
+            "C-[a-z] other than C-c and C-z, or M-Enter. Nothing was typed and no "
+            "turn was used.")
+    if key in ANTIGRAVITY_RESERVED_KEYS:
+        raise PeerNotReady(
+            f"AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY={key} is reserved: it "
+            f"{ANTIGRAVITY_RESERVED_KEYS[key]} a working agent instead of queueing. "
+            "Nothing was typed and no turn was used.")
+    return key
+
+
+def antigravity_idle(capture: str) -> bool:
+    """Require the observed idle footer; a missing busy marker proves nothing.
+
+    Only the footer below the recognised composer counts. Transcript quotations,
+    payload words, and wrapped drafts cannot change this activity decision.
+    """
+    plain, _ = split_dim(capture)
+    bounds = antigravity_input(plain)
+    if bounds is None:
+        return False
+    footer = plain[bounds[1] + 1:]
+    if any(re.match(r"\s*esc to cancel\b", line, re.IGNORECASE) for line in footer):
+        return False
+    return any(re.match(r"\s*\? for shortcuts\b", line) for line in footer)
+
+
+def antigravity_queue_key(capture: str) -> str | None:
+    """Recheck the composer and activity, then choose Enter or the declared key."""
+    box = input_box(capture)
+    if not box or box[0] != ANTIGRAVITY_PROMPT or observe_input(capture) != INPUT_HOLDS_FRAME:
+        return None
+    if antigravity_idle(capture):
+        return "Enter"
+    return antigravity_configured_key()
+
+
+def queue_ready(target: str, deadline: float) -> str | None:
+    """Admit a supported composer only after two matching empty input reads.
+
+    Codex's queue key also submits when idle, covering a turn that ends between
+    admission and submission. Unknown composers and tail mode keep the idle gate.
+    """
+    if INPUT_MODE != "screen" or BUSY_MODE != "queue" or SUBMIT_ATTEMPTS <= 1:
+        return None
+    previous = None
+    for attempt in range(2):
+        if time.monotonic() >= deadline:
+            return None
+        capture = capture_pane_text(target, escapes=True, check=False)
+        if capture.returncode != 0 or time.monotonic() >= deadline:
+            return None
+        box = input_box(capture.stdout)
+        if box is None or box[0] not in (CLAUDE_PROMPT, CODEX_PROMPT, ANTIGRAVITY_PROMPT):
+            return None
+        if observe_input(capture.stdout) != INPUT_EMPTY:
+            return None
+        if box[0] == ANTIGRAVITY_PROMPT and antigravity_configured_key() is None:
+            return None
+        signature = (box[0], box[2])
+        if attempt:
+            if signature != previous:
+                return None
+            return {CODEX_PROMPT: "Tab", CLAUDE_PROMPT: "Enter",
+                    ANTIGRAVITY_PROMPT: ANTIGRAVITY_QUEUE_KEY}[box[0]]
+        previous = signature
+        time.sleep(min(STABILITY_PAUSE, max(0.0, deadline - time.monotonic())))
+    return None
+
+
 def observe_input(capture: str) -> str:
     """Classify the input box on a visible-screen capture taken with escapes.
 
@@ -1919,18 +2103,13 @@ def observe_input(capture: str) -> str:
     input box and does not count, however close to the bottom it sits. When
     more than one UI seems to match, the box lower on screen wins.
     """
-    plain, solid = split_dim(capture)
-    found = [(box, prompt) for box, prompt in ((claude_input(plain), CLAUDE_PROMPT),
-                                               (codex_input(plain), CODEX_PROMPT),
-                                               (antigravity_input(plain), ANTIGRAVITY_PROMPT))
-             if box]
-    if not found:
+    box = input_box(capture)
+    if box is None:
         return INPUT_UNKNOWN
-    (start, end), prompt = max(found)
-    text = "\n".join(plain[start:end])
+    prompt, text, solid = box
     if FRAME_END in text or PASTE_PLACEHOLDER_RE.search(text):
         return INPUT_HOLDS_FRAME
-    typed = "\n".join(solid[start:end]).strip().removeprefix(prompt)
+    typed = solid.strip().removeprefix(prompt)
     return INPUT_OTHER_TEXT if typed.strip() else INPUT_EMPTY
 
 
@@ -2002,16 +2181,18 @@ def frame_landed(target: str) -> bool:
     return FRAME_END in tail or bool(PASTE_PLACEHOLDER_RE.search(tail))
 
 
-def deliver(target: str, msg: str) -> str:
+def deliver(target: str, msg: str, submit_key: str = "Enter") -> str:
     """Put the frame in the target's input box, then make sure it was submitted.
 
-    Returns "delivered" once the frame visibly left the input box, or
+    Returns "delivered" once the frame visibly left the input box after the
+    harness's queue key (Enter for Claude Code, Tab for Codex, and the live
+    mode-dependent key for Antigravity), or
     "unconfirmed" when AGENT_BRIDGE_SUBMIT_ATTEMPTS=1 skips that check.
 
-    The payload and Enter are always two calls, never one. -l sends the string
+    The payload and submit key are always two calls, never one. -l sends the string
     literally, so tokens like "Enter" or "C-c" inside a payload stay text
     instead of being looked up as key names; -- guards a payload starting with a
-    dash. Enter is a key name, so it cannot ride along inside a literal send.
+    dash. The submit key cannot ride along inside a literal send.
 
     The pause before Enter is not politeness. A long literal string followed
     instantly by C-m arrives as one fast burst, and agent TUIs that detect
@@ -2023,8 +2204,8 @@ def deliver(target: str, msg: str) -> str:
     timer that any new input restarts, so hammering Enter every second keeps the
     window open and guarantees the failure it was meant to fix. Observed in the
     wild: three presses a second apart all absorbed, then one press after a
-    pause submitted immediately. Hence wait for the pane to stop changing before
-    the first Enter, and back off between retries rather than pressing harder.
+    pause submitted immediately. Hence wait for the composer to settle before
+    submission, and back off between retries rather than pressing harder.
 
     Every check reads the input box itself (read_input), never the bottom of the
     screen as a whole. Claude Code draws a background-agent list and status
@@ -2034,14 +2215,15 @@ def deliver(target: str, msg: str) -> str:
     - Nothing is typed unless the input box is visibly empty. A modal, a view
       this cannot read, or somebody's half-typed text refuses as PeerNotReady,
       with nothing sent and no turn used.
-    - Enter is pressed only while the frame is visibly in the input box. Once
+    - The submit key is pressed only while the frame is visibly in the input box. Once
       text has been typed, every other outcome is DeliveryUncertain: the frame
       may have been submitted, discarded, or still be waiting, and the bridge
       stays pending so a late arrival can still be answered.
-    - Only an input box that is empty again after Enter counts as delivered.
+    - Only an input box that is empty again after submission counts as delivered.
     """
     if INPUT_MODE == "tail":
         return deliver_by_tail(target, msg)
+    submit_plan = submit_key
     with Focus(target):
         before = read_input(target)
         if before != INPUT_EMPTY:
@@ -2062,8 +2244,9 @@ def deliver(target: str, msg: str) -> str:
         if seen != INPUT_HOLDS_FRAME:
             # Enter is withheld: with the frame not in the input box, it would
             # answer whatever is on screen instead.
-            raise DeliveryUncertain("uncertain", uncertain_message(target, seen))
-        press_enter(target)
+            fallback = recovery_key(submit_key)
+            raise DeliveryUncertain("uncertain", uncertain_message(target, seen, fallback), fallback)
+        submit_key = press_submit(target, submit_plan)
 
         if SUBMIT_ATTEMPTS <= 1:
             return "unconfirmed"
@@ -2075,7 +2258,7 @@ def deliver(target: str, msg: str) -> str:
                 return "delivered"
             if seen == INPUT_HOLDS_FRAME and attempt < SUBMIT_ATTEMPTS:
                 print(f"agent-bridge: {target} still holds the frame unsent; waiting, "
-                      f"then pressing Enter again ({attempt}/{SUBMIT_ATTEMPTS - 1})",
+                      f"then pressing {submit_key_label(submit_key)} again ({attempt}/{SUBMIT_ATTEMPTS - 1})",
                       file=sys.stderr)
                 wait_settled(target)
                 # The screen can change while it settles: the TUI may submit on
@@ -2084,24 +2267,26 @@ def deliver(target: str, msg: str) -> str:
                 if seen == INPUT_EMPTY:
                     return "delivered"
                 if seen == INPUT_HOLDS_FRAME:
-                    press_enter(target)
+                    submit_key = press_submit(target, submit_plan, submit_key)
 
+    # The key pressed last says what the agent was doing then, not now.
+    fallback = recovery_key(submit_plan) if submit_plan == ANTIGRAVITY_QUEUE_KEY else submit_key
     if seen == INPUT_HOLDS_FRAME:
-        raise DeliveryUncertain("unsent", unsent_message(target))
-    raise DeliveryUncertain("uncertain", uncertain_message(target, seen))
+        raise DeliveryUncertain("unsent", unsent_message(target, fallback), fallback)
+    raise DeliveryUncertain("uncertain", uncertain_message(target, seen, fallback), fallback)
 
 
-def unsent_message(target: str) -> str:
+def unsent_message(target: str, submit_key: str = "Enter") -> str:
     return (
         f"the frame was typed into {target} but never submitted after "
         f"{SUBMIT_ATTEMPTS} attempts. It is sitting in that pane's input box, "
-        f"intact. Press Enter there by hand; the peer's reply is then accepted "
+        f"intact. To submit it by hand, {press_instruction(submit_key)}. The peer's reply is then accepted "
         f"as usual, because this bridge stays pending. Do not resend the frame; "
         f"the text is already there."
     )
 
 
-def uncertain_message(target: str, seen: str) -> str:
+def uncertain_message(target: str, seen: str, submit_key: str = "Enter") -> str:
     where = {INPUT_EMPTY: "its input box is empty, so the frame was either "
                           "submitted or discarded",
              INPUT_OTHER_TEXT: "its input box holds other text",
@@ -2110,7 +2295,7 @@ def uncertain_message(target: str, seen: str) -> str:
         f"the frame was typed into {target}, and delivery is uncertain: "
         f"{where.get(seen, seen)}. This bridge stays pending, so if the frame did "
         f"arrive the peer's reply is accepted as usual. Look at that pane: if the "
-        f"frame is sitting in its input box, press Enter there. Do not resend the "
+        f"frame is sitting in its input box, {press_instruction(submit_key)}. Do not resend the "
         f"frame. If it is gone and no reply comes, run reset."
     )
 
@@ -2212,7 +2397,7 @@ def send_or_release(identity: dict[str, str], target: str,
         if meta.get("stop"):
             record.update(status="terminated", reason=meta["stop"])
         record.pop("sending", None)
-        record.update(delivery=exc.delivery, delivery_detail=str(exc))
+        record.update(delivery=exc.delivery, delivery_detail=str(exc), submit_key=exc.submit_key)
         save_state(identity, record)
         log_line = (f"UNCERTAIN target={target} turn={meta['turn']}/{meta['max']} "
                     f"delivery={exc.delivery} "
@@ -2430,7 +2615,7 @@ def send_message(identity: dict[str, str], target: str, meta: dict[str, str],
     check_peer_reply_window(identity, target, meta)
     # identity goes in so a human's abort sentinel ends a long readiness
     # wait, not just the moment after it.
-    wait_ready(target, identity=identity)
+    submit_key = wait_ready(target, identity=identity)
     check_abort(identity)
     peer = check_peer_reply_window(identity, target, meta)
     if peer is not None and not peer["available"]:
@@ -2448,7 +2633,8 @@ def send_message(identity: dict[str, str], target: str, meta: dict[str, str],
         Path(identity.get("outbound_frame_file")
              or outbound_frame_file(identity["self_socket"], identity["self_pane"])), msg)
 
-    delivery = deliver(target, msg)
+    delivery = (deliver(target, msg, submit_key=submit_key)
+                if submit_key in ("Tab", ANTIGRAVITY_QUEUE_KEY) else deliver(target, msg))
 
     deadline = time.time() + DEFAULT_ACK_TIMEOUT
     log_identity_basis(identity)
@@ -2833,7 +3019,7 @@ def delivery_note(state: dict[str, Any] | None) -> str | None:
         return None
     return (f"turn {state.get('turn')} to {state.get('target')} was typed into that "
             f"pane but delivery is {state['delivery']}. Look at the pane: if the frame "
-            f"is in its input box, press Enter there. Do not resend. A validated reply "
+            f"is in its input box, {press_instruction(state.get('submit_key', 'Enter'))}. Do not resend. A validated reply "
             f"from the peer settles it; reset gives up on it.")
 
 

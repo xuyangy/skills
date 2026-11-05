@@ -141,14 +141,45 @@ leaving it as a guess.
 
 ## "target %N did not reach a confirmed idle prompt"
 
-A busy peer is not an error. `not ready` on stderr means the helper is waiting
-and will re-check: it backs off 2s, 4s, 8s, 15s, then every 30s, for up to
+With `AGENT_BRIDGE_BUSY_MODE=queue` (default), Claude Code and Codex qualify
+when two visible-screen reads show the same empty composer. Claude Code uses
+Enter and Codex uses Tab. The helper checks that the pasted frame appears in
+the composer and disappears after submission; busy wording alone never proves
+submission. A queued message is transport-delivered, with receiver acceptance
+still unknown until the peer validates it. Close confirmations use this same
+path, so already agreed work need not stop to receive one.
+
+Antigravity requires `AGENT_BRIDGE_ANTIGRAVITY_QUEUE_KEY` for busy delivery.
+Unset or empty means wait for idle before any paste. Use `Enter` when the target
+uses Queued Messages: Queue, `M-m` for the standard opposite-action binding
+when it uses Send Immediately, or its supported rebound key. Invalid tokens
+refuse before paste. This declares a target binding; it does not detect the
+target's effective settings. No settings file or delivery hint is consulted.
+
+Antigravity's `? for shortcuts` footer establishes idle and selects Enter,
+even if the completed transcript quotes `esc to cancel`. The actual busy
+footer (`esc to cancel`) selects the configured queue key. A missing footer,
+including the 1.5.1 working screen showing `Reading file...` and a tip, never
+establishes idle. Unknown activity can receive only through an explicitly
+configured queue binding. The composer and activity are checked again before
+each retry without another paste. Unknown composer screens remain uncertain.
+Recovery text always names both keys: Enter if the agent is idle, or the
+declared queue key if it is still working. A key an earlier attempt pressed
+shows what the agent was doing then, not when a human looks, so it is reported
+only as history. If the human cannot tell, they do not guess. `C-c` and `C-z` are refused as queue keys before
+paste, because they interrupt or suspend a working agent.
+
+Other targets, tail mode, and sends with submission verification disabled keep
+the idle gate. Set `AGENT_BRIDGE_BUSY_MODE=idle` for a custom keymap or a harness
+version without queue support. An occupied or unreadable composer never
+qualifies for busy delivery. `not ready` means the helper is waiting and will
+re-check: it backs off 2s, 4s, 8s, 15s, then every 30s, for up to
 `AGENT_BRIDGE_READY_TIMEOUT` seconds (default 900). Let it run; do not kill the
 command and do not resend.
 
 The error above is raised only when that whole budget passed without the pane
-ever being both quiet and still. Real causes: the peer is generating a very long
-turn; the pane is showing a scrolling log; a modal or pager is open. If the peer
+ever meeting its readiness check. Real causes: an unsupported peer is generating
+a long turn; the pane is showing a scrolling log; a modal or pager is open. If the peer
 is genuinely working a long job, re-run the same `send`/`reply` command, or raise
 `AGENT_BRIDGE_READY_TIMEOUT`.
 
@@ -183,11 +214,12 @@ panes:
   busy, because Claude Code draws those as static decoration in its input box.
   Verified false positive on two idle agent panes.
 
-What survives is wording that only appears during generation (`esc to
-interrupt`, `Thinking…`) plus the stability check — two captures 0.6s apart must
-be identical. If a new CLI needs support, add its busy *wording* to `BUSY_RE`.
-Removing the check is not a fix; it just moves the failure into the peer's input
-box.
+The idle fallback uses wording that only appears during generation (`esc to
+interrupt`, `Thinking…`) and two identical captures 0.6s apart. Queue admission
+instead compares the recognised input area, so streaming transcript output does
+not block it. Add busy delivery support for another CLI only after checking its
+queue key and how submission can be observed; an empty-looking screen alone is
+insufficient.
 
 ## Part of the payload was interpreted as keystrokes
 
@@ -220,8 +252,9 @@ that burst becomes a line break in the buffer instead of a submit.
 
 Two consequences shape the fix, and the second is the counter-intuitive one:
 
-1. Wait before pressing Enter. `wait_settled` polls the pane until it stops
-   repainting, so the paste has finished being ingested.
+1. Wait before pressing the submit key. `wait_settled` polls the recognised
+   composer until it settles, so transcript output can continue while the paste
+   finishes being ingested. Unknown UIs use whole-screen stability.
 2. **Do not hammer Enter.** Paste detection is a timer that fresh input
    restarts, so fast retries hold the window open and guarantee the stall.
    Observed live: three presses a second apart were all absorbed, then a single
@@ -230,7 +263,7 @@ Two consequences shape the fix, and the second is the counter-intuitive one:
 
 Delivery is confirmed, not assumed. If it still fails, the helper prints
 `UNCERTAIN ... delivery=unsent` and says the text is already in that pane —
-**press Enter there by hand; do not resend**, or the peer receives the frame
+**press the reported submit key there by hand; do not resend**, or the peer receives the frame
 twice. The bridge stays `pending`, so the peer's reply to that frame is
 accepted; see *The send is uncertain*.
 
@@ -240,6 +273,7 @@ Tuning:
 | --- | --- | --- |
 | `AGENT_BRIDGE_SUBMIT_DELAY` | `0.8` | floor before the first Enter; raise for a slow TUI |
 | `AGENT_BRIDGE_SUBMIT_ATTEMPTS` | `4` | total Enter presses; set to `1` for a non-TUI target |
+| `AGENT_BRIDGE_BUSY_MODE` | `queue` | allow known queue composers; use `idle` for custom bindings or unsupported versions |
 
 Set attempts to `1` when the target echoes your text back — a plain `cat`, a
 dumb REPL. There an echoed frame is indistinguishable from an unsent one, so the
