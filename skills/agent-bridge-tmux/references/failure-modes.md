@@ -10,6 +10,14 @@ produce an `OUTBOUND` line. If the agent ends its turn after announcing a send,
 the helper never ran. Finish the call before reporting delivery, or report the
 actual refusal. Check `status` before resuming after an idle gap.
 
+The harness can also stop the command before the helper starts: a denied
+permission, a permission check that returned no verdict, a sandbox refusal.
+Nothing was sent, no turn was used, and the bridge state has not moved, so the
+same command is safe to run again. The peer is still waiting, and nothing but
+the agent's report tells the human. Follow [the attention rule](../SKILL.md#a-send-that-did-not-go-out-needs-the-humans-attention):
+a bold `BRIDGE MESSAGE NOT SENT` first line, the exact command, and an open
+question through the harness's question tool.
+
 ## OUTBOUND was printed, but the peer rejected the frame
 
 `delivery=delivered acceptance=unknown` separates transport delivery from receiver

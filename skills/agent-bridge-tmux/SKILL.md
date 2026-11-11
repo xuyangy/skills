@@ -39,6 +39,38 @@ It does not mean the current task finished or the queued message has been read.
 An `UNCERTAIN` line instead of `OUTBOUND` means the frame was typed into the
 peer but not confirmed sent; see *A frame typed but not confirmed*.
 
+## A send that did not go out needs the human's attention
+
+A due `start` or `reply` that ends your turn without an `OUTBOUND` line leaves
+the peer waiting, and only the human can see it. This covers every cause: the
+helper refused, the helper printed `UNCERTAIN`, or the harness stopped the
+command before the helper ran — a denied permission, a permission check that
+returned no verdict, a sandbox refusal. A plain closing paragraph looks like any
+other finished turn, so the human reads it late or not at all. Make it
+impossible to miss:
+
+1. **Open the report with this line, alone and in bold**, before anything else:
+   `BRIDGE MESSAGE NOT SENT — target %N, turn T of M`. For an `UNCERTAIN`
+   result write `BRIDGE MESSAGE NOT CONFIRMED` instead.
+2. **Say in one sentence what stopped it**, then give the body file's absolute
+   path, the exact command that sends it, and the `abort_command`.
+3. **Ask through the harness's question tool** before you end your turn, under
+   the rules in *Ending is the user's call*. An open question makes the harness
+   prompt and notify the human; text alone does not. The question itself says
+   that the bridge message was not sent, to which pane, and on which turn.
+
+The two options depend on what happened:
+
+| What happened | Option 1 | Option 2 |
+| --- | --- | --- |
+| The harness stopped the command, or the helper said nothing was sent and no turn was used | Run the same command again | Leave it: the human runs the command, or says stop |
+| `UNCERTAIN` | The human pressed the submit key in the peer pane; wait for the reply | The frame is gone: go to *Ending is the user's call* |
+| A break or the turn limit | *Continue*, as in *Ending is the user's call* | *Stop*, as in *Ending is the user's call* |
+
+Sections below that tell you to run the same command again yourself still
+apply first. This rule starts when you would otherwise end your turn with the
+message unsent.
+
 ## Precondition: one tmux server
 
 Pane ids like `%17` are unique only within a tmux server, and `send-keys` targets

@@ -153,6 +153,16 @@ ended and offer you two choices: reset and open a fresh bridge that carries the
 context forward, with however many turns you grant it, or reset and stop. It does
 not decide that on its own, and it never continues without you saying so.
 
+## If a message does not go out
+
+A message that was due and did not leave is the one case where the other agent
+waits and nothing moves. The agent must not bury it in an ordinary report. Its
+report starts with **BRIDGE MESSAGE NOT SENT** (or **NOT CONFIRMED**), names
+the pane and the turn, and gives you the exact command that sends the message.
+It then asks you a question with two choices, so your harness prompts and
+notifies you. This applies also when the harness blocked the command before
+the helper ran, such as a failed permission check.
+
 ## If a message gets stuck in the other pane
 
 Agent TUIs treat fast input as a paste, and a newline inside a paste is a line

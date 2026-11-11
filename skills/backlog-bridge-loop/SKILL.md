@@ -66,6 +66,9 @@ Stop, report, and wait for the human when any of these happens:
 - **Check-in.** `MAX_ITEMS` items are done. Report them and ask whether to go on.
 - **A bridge ends badly.** It hits its turn limit or breaks. Follow
   `agent-bridge-tmux` and ask the human; do not open the next bridge on your own.
+- **A bridge message does not go out.** Follow `agent-bridge-tmux` (*A send that
+  did not go out needs the human's attention*): the bold first line and the
+  question tool. The loop does not move on while the peer waits for a message.
 - **The next step needs the human.** See *Limits*.
 
 When you ask the human, follow the question-tool rule in `agent-bridge-tmux`
