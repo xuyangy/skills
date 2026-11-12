@@ -315,6 +315,10 @@ screen before anything is typed, and nothing is typed unless it is empty:
   transcript are `>` rows under a rule too, but never between the lowest
   pair of rules.
 - Dim text is the empty box's hint ("Ask Codex to do anything"), not input.
+- In Antigravity's box, the hint of a new session ("Auto mode: edits & safe
+  commands auto-approved ...") is coloured, not dim. Typed text has the default
+  foreground and the prompt has its own colour; text in any other colour is
+  the hint, not input.
 
 A modal has no such box, and text somebody typed is not empty, so both refuse
 with `so nothing was typed`. That refusal is a `PeerNotReady`.

@@ -1655,6 +1655,26 @@ class TestAntigravityInput(unittest.TestCase):
     def test_an_empty_prompt_is_empty(self) -> None:
         self.assertEqual(ab.observe_input(antigravity_screen("")), ab.INPUT_EMPTY)
 
+    def test_a_new_session_hint_is_empty(self) -> None:
+        # Live capture of Antigravity CLI 1.5.6, just started: the hint is
+        # coloured, not dim, and the footer is a custom status line.
+        hint = ("\x1b[38;5;109mAuto mode: edits & safe commands auto-approved "
+                "(shift+tab to cycle)")
+        status = "\x1b[38;5;108m\uf192 READY\x1b[90m | \x1b[38;5;250mhost\n"
+        for footer in (ANTIGRAVITY_IDLE, status):
+            with self.subTest(footer=footer):
+                self.assertEqual(ab.observe_input(antigravity_screen(hint, footer=footer)),
+                                 ab.INPUT_EMPTY)
+
+    def test_text_typed_over_a_hint_colour_is_not_empty(self) -> None:
+        typed = "draft \x1b[38;5;109msuggested ending"
+        self.assertEqual(ab.observe_input(antigravity_screen(typed)), ab.INPUT_OTHER_TEXT)
+
+    def test_a_selected_option_in_the_prompt_colour_is_not_empty(self) -> None:
+        screen = (f"{ANTIGRAVITY_RULE}\n\x1b[38;5;111m> Allow once\x1b[39m\n"
+                  f"  \x1b[38;5;109mDeny\x1b[39m\n{ANTIGRAVITY_RULE}\n{ANTIGRAVITY_IDLE}")
+        self.assertEqual(ab.observe_input(screen), ab.INPUT_OTHER_TEXT)
+
     def test_typed_text_is_not_empty(self) -> None:
         self.assertEqual(ab.observe_input(antigravity_screen("draft text")),
                          ab.INPUT_OTHER_TEXT)

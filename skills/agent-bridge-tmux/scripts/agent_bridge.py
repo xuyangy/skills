@@ -32,6 +32,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -1895,24 +1896,19 @@ CODEX_FOOTER_LINES = 4
 ANTIGRAVITY_FOOTER_LINES = 3
 
 
-def split_dim(capture: str) -> tuple[list[str], list[str]]:
-    """Split an escape-bearing capture into two views, line for line.
+def styled_runs(capture: str) -> Iterator[tuple[str, bool, str | None]]:
+    """Each run of text in an escape-bearing capture, with whether it is dim
+    (faint) and its foreground colour; None is the default foreground.
 
-    The first view is all the text. The second leaves out dim (faint) text,
-    which is how an agent UI draws the hint in an empty input box — Codex's
-    "Ask Codex to do anything", or a rotating example prompt. Attributes carry
-    across lines in a capture, so the state is tracked over the whole capture,
-    not line by line. Colour parameters (38/48/58;5;n and ;2;r;g;b) are skipped
-    whole, so a colour value of 2 is not read as dim.
+    Attributes carry across lines in a capture, so the state is tracked over
+    the whole capture, not line by line. Colour parameters (38/48/58;5;n and
+    ;2;r;g;b) are read whole, so a colour value of 2 is not read as dim.
     """
-    plain: list[str] = []
-    solid: list[str] = []
     dim = False
+    foreground: str | None = None
     pos = 0
     for match in ANSI_RE.finditer(capture):
-        segment = capture[pos:match.start()]
-        plain.append(segment)
-        solid.append("\n" * segment.count("\n") if dim else segment)
+        yield capture[pos:match.start()], dim, foreground
         pos = match.end()
         sgr = SGR_RE.fullmatch(match.group(0))
         if not sgr:
@@ -1923,17 +1919,62 @@ def split_dim(capture: str) -> tuple[list[str], list[str]]:
             code = params[index] or "0"
             if code in ("38", "48", "58"):
                 mode = params[index + 1] if index + 1 < len(params) else ""
-                index += 3 if mode == "5" else 5 if mode == "2" else 2
+                size = 3 if mode == "5" else 5 if mode == "2" else 2
+                if code == "38":
+                    foreground = ";".join(params[index:index + size])
+                index += size
                 continue
-            if code in ("0", "22"):
+            if code == "0":
+                dim, foreground = False, None
+            elif code == "22":
                 dim = False
             elif code == "2":
                 dim = True
+            elif code == "39":
+                foreground = None
+            elif re.fullmatch(r"3[0-7]|9[0-7]", code):
+                foreground = code
             index += 1
-    segment = capture[pos:]
-    plain.append(segment)
-    solid.append("\n" * segment.count("\n") if dim else segment)
+    yield capture[pos:], dim, foreground
+
+
+def split_dim(capture: str) -> tuple[list[str], list[str]]:
+    """Split an escape-bearing capture into two views, line for line.
+
+    The first view is all the text. The second leaves out dim (faint) text,
+    which is how an agent UI draws the hint in an empty input box — Codex's
+    "Ask Codex to do anything", or a rotating example prompt.
+    """
+    plain: list[str] = []
+    solid: list[str] = []
+    for segment, dim, _foreground in styled_runs(capture):
+        plain.append(segment)
+        solid.append("\n" * segment.count("\n") if dim else segment)
     return "".join(plain).split("\n"), "".join(solid).split("\n")
+
+
+def antigravity_solid(capture: str, start: int, end: int) -> str:
+    """Rows start to end of the capture, without Antigravity's hint text.
+
+    Antigravity draws the hint in a new session's empty input box ("Auto mode:
+    edits & safe commands auto-approved ...") in a colour, not dim. Typed text
+    has the default foreground. The prompt has its own colour, which the
+    selected option of a modal shares. Text in any other colour is the hint.
+    """
+    rows: list[list[str]] = [[] for _ in range(start, end)]
+    prompt_colour: str | None = None
+    prompt_seen = False
+    row = 0
+    for segment, dim, foreground in styled_runs(capture):
+        for index, piece in enumerate(segment.split("\n")):
+            row += 1 if index else 0
+            if not piece or not start <= row < end:
+                continue
+            if not prompt_seen:
+                prompt_seen, prompt_colour = True, foreground
+            if not dim and foreground in (None, prompt_colour):
+                rows[row - start].append(piece)
+    return "\n".join("".join(pieces) for pieces in rows)
 
 
 ZERO_WIDTH_JOINER = "\u200d"
@@ -2037,7 +2078,7 @@ def antigravity_input(plain: list[str]) -> tuple[int, int] | None:
 
 
 def input_box(capture: str) -> tuple[str, str, str] | None:
-    """The lowest recognised composer's prompt, visible text and non-dim text."""
+    """The lowest recognised composer's prompt, visible text and non-hint text."""
     plain, solid = split_dim(capture)
     found = [(box, prompt) for box, prompt in ((claude_input(plain), CLAUDE_PROMPT),
                                                (codex_input(plain), CODEX_PROMPT),
@@ -2046,7 +2087,9 @@ def input_box(capture: str) -> tuple[str, str, str] | None:
     if not found:
         return None
     (start, end), prompt = max(found)
-    return prompt, "\n".join(plain[start:end]), "\n".join(solid[start:end])
+    typed = (antigravity_solid(capture, start, end) if prompt == ANTIGRAVITY_PROMPT
+             else "\n".join(solid[start:end]))
+    return prompt, "\n".join(plain[start:end]), typed
 
 
 def antigravity_configured_key() -> str | None:
