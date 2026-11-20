@@ -132,6 +132,14 @@ For tools without shell selection, set a supported locale in the tool's launch
 environment before it starts Bash. See [locale warnings](references/failure-modes.md#bash-warning-setlocale-on-macos)
 if warnings persist. Keep the normal launch on other platforms.
 
+## Antigravity: run outside the sandbox
+
+In Antigravity, run every bridge helper and tmux command with the command
+tool's sandbox bypass, starting with the first one, `tmux list-panes`
+included. Its sandbox blocks the installed helper and the tmux socket, so a
+sandboxed run always fails with `Operation not permitted` — see
+[the failure mode](references/failure-modes.md#operation-not-permitted-on-the-helper-or-the-tmux-socket).
+
 ## Commands
 
 Resolve `scripts/agent_bridge.py` relative to this `SKILL.md` — the skill may be

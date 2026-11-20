@@ -18,6 +18,18 @@ the agent's report tells the human. Follow [the attention rule](../SKILL.md#a-se
 a bold `BRIDGE MESSAGE NOT SENT` first line, the exact command, and an open
 question through the harness's question tool.
 
+## "Operation not permitted" on the helper or the tmux socket
+
+```text
+python3: can't open file '.../agent_bridge.py': [Errno 1] Operation not permitted
+error connecting to /private/tmp/tmux-501/default (Operation not permitted)
+```
+
+Antigravity ran the command inside its sandbox, which blocks the installed
+helper and the tmux socket. Nothing ran, so nothing was sent and no turn was
+used. Run the same command again with the sandbox bypass, and use the bypass
+for every later bridge command too — see [Antigravity: run outside the sandbox](../SKILL.md#antigravity-run-outside-the-sandbox).
+
 ## OUTBOUND was printed, but the peer rejected the frame
 
 `delivery=delivered acceptance=unknown` separates transport delivery from receiver
